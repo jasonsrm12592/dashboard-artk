@@ -63,7 +63,9 @@ def cargar_datos_generales():
             
             # Limpieza
             df = df[~df['name'].str.contains("WT-", case=False, na=False)]
-            df = df[~df['Cliente'].str.contains("ALROTEK", case=False, na=False)]
+            
+            # FILTRO CLIENTES INDESEADOS (Ajusta aquí si necesitas borrar a Alrotek u otros)
+            # df = df[~df['Cliente'].str.contains("ALROTEK", case=False, na=False)]
             
         return df
     except Exception as e:
@@ -78,7 +80,6 @@ def cargar_detalle_productos():
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Filtro: Últimos 2 años
         anio_inicio = datetime.now().year - 1
         dominio = [
             ['parent_state', '=', 'posted'],
@@ -95,7 +96,7 @@ def cargar_detalle_productos():
         df = pd.DataFrame(registros)
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'])
-            df['ID_Producto'] = df['product_id'].apply(lambda x: x[0] if x else 0) # Guardamos ID numérico
+            df['ID_Producto'] = df['product_id'].apply(lambda x: x[0] if x else 0)
             df['Producto'] = df['product_id'].apply(lambda x: x[1] if x else "Otros")
             df['Venta_Neta'] = df['credit'] - df['debit']
             
@@ -106,26 +107,35 @@ def cargar_detalle_productos():
 
 @st.cache_data(ttl=3600)
 def cargar_inventario():
-    """NUEVO: Descarga STOCK ACTUAL (product.product)"""
+    """Descarga STOCK + TIPO DE PRODUCTO + FECHA CREACIÓN"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Filtro: Solo productos con existencia > 0 (Para no traer miles de items vacíos)
-        dominio = [
-            ['qty_available', '>', 0],
-            ['active', '=', True]
-        ]
-        campos = ['name', 'qty_available', 'list_price', 'standard_price']
+        # Traemos todo lo activo, aunque tenga stock 0 (para saber el tipo)
+        dominio = [['active', '=', True]]
+        
+        # SOLICITUD DE CAMPOS NUEVOS: detailed_type (Servicio/Producto) y create_date
+        campos = ['name', 'qty_available', 'list_price', 'standard_price', 'detailed_type', 'create_date']
         
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': campos})
         
         df = pd.DataFrame(registros)
         if not df.empty:
-            df['Valor_Inventario'] = df['qty_available'] * df['standard_price'] # Costo total
+            df['create_date'] = pd.to_datetime(df['create_date'])
+            df['Valor_Inventario'] = df['qty_available'] * df['standard_price']
             df.rename(columns={'id': 'ID_Producto', 'name': 'Producto', 'qty_available': 'Stock'}, inplace=True)
+            
+            # Mapeo de Tipos (Odoo usa nombres en inglés/código)
+            tipo_map = {
+                'product': 'Almacenable',
+                'service': 'Servicio',
+                'consu': 'Consumible'
+            }
+            # Usamos .get por si viene un tipo nuevo o vacío
+            df['Tipo'] = df['detailed_type'].map(tipo_map).fillna('Otro')
             
         return df
     except Exception as e:
@@ -144,10 +154,10 @@ st.title("🚀 Monitor Comercial ALROTEK")
 
 tab_kpis, tab_prod, tab_cli = st.tabs(["📊 Visión General", "📦 Productos & Inventario", "👥 Análisis Clientes"])
 
-with st.spinner('Sincronizando Odoo (Ventas + Inventario)...'):
+with st.spinner('Procesando datos (Ventas + Inventario + Tipos)...'):
     df_main = cargar_datos_generales()
-    df_prod = cargar_detalle_productos()
-    df_stock = cargar_inventario()
+    df_prod = cargar_detalle_productos() # Ventas detalle
+    df_stock = cargar_inventario()       # Catálogo maestro
     df_metas = cargar_metas()
 
 # === PESTAÑA 1: GENERAL ===
@@ -160,72 +170,111 @@ with tab_kpis:
         venta = df_anio['Venta_Neta'].sum()
         meta = df_metas[df_metas['Mes'].dt.year == anio_sel]['Meta'].sum()
         
-        c1, c2, c3 = st.columns(3)
+        # --- CÁLCULO TICKET PROMEDIO (Recuperado) ---
+        cant_facturas = df_anio['name'].nunique()
+        ticket_promedio = (venta / cant_facturas) if cant_facturas > 0 else 0
+        
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Venta Total", f"₡ {venta/1e6:,.1f} M")
         c2.metric("Meta Anual", f"₡ {meta/1e6:,.1f} M", f"Falta: {(meta-venta)/1e6:,.1f}M")
         c3.metric("Cumplimiento", f"{(venta/meta*100) if meta>0 else 0:.1f}%")
+        c4.metric("Ticket Promedio", f"₡ {ticket_promedio:,.0f}", f"{cant_facturas} Facturas")
+
         st.divider()
         
-        # Gráfico
-        v_mes = df_anio.groupby('Mes')['Venta_Neta'].sum().reset_index()
-        dash = pd.merge(v_mes, df_metas, left_on='Mes', right_on='Mes', how='left').fillna(0)
-        cols = ['#27ae60' if r >= m else '#c0392b' for r, m in zip(dash['Venta_Neta'], dash['Meta'])]
-        
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=dash['Mes'], y=dash['Venta_Neta'], name='Venta', marker_color=cols))
-        fig.add_trace(go.Scatter(x=dash['Mes'], y=dash['Meta'], name='Meta', line=dict(color='#f1c40f', width=4, dash='dash')))
-        fig.update_layout(height=400, margin=dict(t=30, b=10), template="plotly_white")
-        st.plotly_chart(fig, use_container_width=True)
+        c_graf, c_vend = st.columns([2, 1])
+        with c_graf:
+            v_mes = df_anio.groupby('Mes')['Venta_Neta'].sum().reset_index()
+            dash = pd.merge(v_mes, df_metas, left_on='Mes', right_on='Mes', how='left').fillna(0)
+            cols = ['#27ae60' if r >= m else '#c0392b' for r, m in zip(dash['Venta_Neta'], dash['Meta'])]
+            
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=dash['Mes'], y=dash['Venta_Neta'], name='Venta', marker_color=cols))
+            fig.add_trace(go.Scatter(x=dash['Mes'], y=dash['Meta'], name='Meta', line=dict(color='#f1c40f', width=4, dash='dash')))
+            fig.update_layout(title="Evolución Mensual", height=400, template="plotly_white")
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with c_vend:
+            st.subheader("🏆 Top Vendedores")
+            rank = df_anio.groupby('Vendedor')['Venta_Neta'].sum().sort_values().tail(10)
+            fig_v = go.Figure(go.Bar(x=rank.values, y=rank.index, orientation='h', text=rank.apply(lambda x: f'{x/1e6:.1f}M'), textposition='auto'))
+            fig_v.update_layout(height=400, margin=dict(l=10, r=10, t=30, b=10))
+            st.plotly_chart(fig_v, use_container_width=True)
 
-# === PESTAÑA 2: PRODUCTOS + INVENTARIO ZOMBIE ===
+# === PESTAÑA 2: PRODUCTOS + ZOMBIES INTELIGENTES ===
 with tab_prod:
     if not df_prod.empty and not df_stock.empty:
         anios_p = sorted(df_prod['date'].dt.year.unique(), reverse=True)
         anio_p_sel = st.selectbox("Año de Análisis", anios_p, key="prod_anio")
         
-        # Ventas del año seleccionado
-        df_p_anio = df_prod[df_prod['date'].dt.year == anio_p_sel]
+        # Cruzamos las ventas con el catálogo para saber el TIPO de cada venta
+        # (Merge left para traer 'Tipo' desde df_stock hacia df_p_anio)
+        df_p_anio = df_prod[df_prod['date'].dt.year == anio_p_sel].copy()
+        df_p_anio = pd.merge(df_p_anio, df_stock[['ID_Producto', 'Tipo']], on='ID_Producto', how='left')
+        df_p_anio['Tipo'] = df_p_anio['Tipo'].fillna('Desconocido')
+
+        # 1. ANÁLISIS POR TIPO (Servicio vs Almacenable)
+        st.subheader("📦 Composición de la Venta")
+        col_tipo1, col_tipo2 = st.columns([1, 2])
         
-        # 1. PRODUCTOS MÁS VENDIDOS (Top Sellers)
-        top_prod = df_p_anio.groupby('Producto')[['Venta_Neta', 'quantity']].sum().reset_index()
-        
-        st.subheader(f"🏆 Top Ventas {anio_p_sel}")
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            top_15 = top_prod.sort_values('Venta_Neta', ascending=False).head(15).sort_values('Venta_Neta', ascending=True)
-            fig_p = px.bar(top_15, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s', color='Venta_Neta')
-            fig_p.update_layout(height=500)
-            st.plotly_chart(fig_p, use_container_width=True)
-        with c2:
-            st.dataframe(top_prod.sort_values('Venta_Neta', ascending=False).head(50)
-                         .style.format({'Venta_Neta': '₡ {:,.0f}', 'quantity': '{:,.0f}'}), height=500)
+        with col_tipo1:
+            # Gráfico de Dona
+            ventas_por_tipo = df_p_anio.groupby('Tipo')['Venta_Neta'].sum().reset_index()
+            fig_pie = px.pie(ventas_por_tipo, values='Venta_Neta', names='Tipo', hole=0.4, 
+                             color_discrete_sequence=px.colors.qualitative.Set2)
+            fig_pie.update_layout(height=350, title_text="Ventas por Categoría")
+            st.plotly_chart(fig_pie, use_container_width=True)
+            
+        with col_tipo2:
+            # Top Productos
+            st.markdown(f"**Top 10 Productos ({anio_p_sel})**")
+            # Filtro opcional por tipo
+            tipo_filtro = st.radio("Filtrar lista por:", ["Todos", "Almacenable", "Servicio", "Consumible"], horizontal=True)
+            
+            df_show = df_p_anio if tipo_filtro == "Todos" else df_p_anio[df_p_anio['Tipo'] == tipo_filtro]
+            
+            top_prod = df_show.groupby('Producto')[['Venta_Neta', 'quantity']].sum().reset_index()
+            top_10 = top_prod.sort_values('Venta_Neta', ascending=False).head(10).sort_values('Venta_Neta', ascending=True)
+            
+            fig_bar = px.bar(top_10, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s', color='Venta_Neta')
+            fig_bar.update_layout(height=350, xaxis_title="Monto", yaxis_title="")
+            st.plotly_chart(fig_bar, use_container_width=True)
         
         st.divider()
         
-        # 2. ANÁLISIS DE BAJA ROTACIÓN (ZOMBIES) 🧟‍♂️
-        st.subheader("⚠️ Alerta: Productos sin Movimiento (Con Stock)")
-        st.caption(f"Productos que tienes en bodega HOY, pero que NO se han vendido en todo el {anio_p_sel}")
+        # 2. ANÁLISIS DE BAJA ROTACIÓN (ZOMBIES MEJORADO) 🧟‍♂️
+        st.subheader("⚠️ Alerta: Productos Hueso (Baja Rotación)")
         
-        # Lógica: Tenemos Stock > 0, pero Venta Año Seleccionado = 0 (o no existe)
+        # Lógica:
+        # a) Tienen Stock > 0
+        # b) NO se vendieron en el año seleccionado
+        # c) NO son nuevos (Creados antes de este año)
+        
         productos_vendidos_ids = set(df_p_anio['ID_Producto'].unique())
         
-        # Filtramos el inventario: Dejamos solo los que NO están en la lista de vendidos
-        # El símbolo '~' niega la condición (isin)
+        # Filtro inicial: Tienen stock y no se vendieron
         df_zombies = df_stock[~df_stock['ID_Producto'].isin(productos_vendidos_ids)].copy()
         
-        # Ordenamos por valor monetario atrapado (Costo * Cantidad)
+        # FILTRO DE NOVEDAD: Excluir los creados en el mismo año de análisis
+        # (Si analizo 2025, borro los creados en 2025 porque son nuevos, no huesos)
+        df_zombies = df_zombies[df_zombies['create_date'].dt.year < anio_p_sel]
+        
+        # Solo Almacenables (Los servicios no son "hueso")
+        df_zombies = df_zombies[df_zombies['Tipo'] == 'Almacenable']
+        
+        # Ordenar por dinero atrapado
         df_zombies = df_zombies.sort_values('Valor_Inventario', ascending=False)
         
         total_atrapado = df_zombies['Valor_Inventario'].sum()
         
         m1, m2 = st.columns(2)
-        m1.metric("Dinero Atrapado (Costo)", f"₡ {total_atrapado/1e6:,.1f} M")
+        m1.metric("Capital Inmovilizado (Costo)", f"₡ {total_atrapado/1e6:,.1f} M", help="Solo productos almacenables antiguos sin venta este año")
         m2.metric("Items sin rotación", len(df_zombies))
         
-        st.write("Top 50 Productos con mayor capital inmovilizado:")
+        st.write(f"Top Productos almacenables antiguos sin venta en {anio_p_sel}:")
         st.dataframe(
-            df_zombies[['Producto', 'Stock', 'list_price', 'Valor_Inventario']].head(50)
-            .style.format({'list_price': '₡ {:,.0f}', 'Valor_Inventario': '₡ {:,.0f}'}),
+            df_zombies[['Producto', 'Tipo', 'create_date', 'Stock', 'list_price', 'Valor_Inventario']].head(50)
+            .style.format({'list_price': '₡ {:,.0f}', 'Valor_Inventario': '₡ {:,.0f}', 'create_date': '{:%Y-%m-%d}'}),
             use_container_width=True
         )
 
