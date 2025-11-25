@@ -104,12 +104,13 @@ def cargar_detalle_productos():
 
 @st.cache_data(ttl=3600)
 def cargar_inventario():
-    """Descarga STOCK y filtra KITS"""
+    """Descarga STOCK, COSTOS y filtra KITS"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
+        # 1. KITS FANTASMA
         try:
             ids_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
             kits_data = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'read', [ids_kits], {'fields': ['product_tmpl_id']})
@@ -117,6 +118,7 @@ def cargar_inventario():
         except:
             ids_templates_kit = []
 
+        # 2. CATÁLOGO
         dominio = [['active', '=', True]]
         campos = ['name', 'qty_available', 'list_price', 'standard_price', 'detailed_type', 'create_date', 'product_tmpl_id']
         
@@ -127,6 +129,7 @@ def cargar_inventario():
         if not df.empty:
             df['create_date'] = pd.to_datetime(df['create_date'])
             df['Valor_Inventario'] = df['qty_available'] * df['standard_price']
+            
             df.rename(columns={'id': 'ID_Producto', 'name': 'Producto', 'qty_available': 'Stock', 'standard_price': 'Costo'}, inplace=True)
             
             df['ID_Template'] = df['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
@@ -151,16 +154,17 @@ def cargar_metas():
 # --- 4. INTERFAZ ---
 st.title("🚀 Monitor Comercial ALROTEK")
 
-tab_kpis, tab_prod, tab_cli = st.tabs(["📊 Visión General", "📦 Productos & Inventario", "👥 Análisis Clientes"])
+# 4 PESTAÑAS AHORA
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Visión General", "📦 Ventas por Producto", "🧟 Control Inventario", "👥 Inteligencia Clientes"])
 
-with st.spinner('Procesando datos (Ventas + Inventario + Clientes)...'):
+with st.spinner('Sincronizando todo...'):
     df_main = cargar_datos_generales()
     df_prod = cargar_detalle_productos()
-    df_stock = cargar_inventario()
+    df_cat = cargar_inventario()
     df_metas = cargar_metas()
 
 # === PESTAÑA 1: GENERAL ===
-with tab_kpis:
+with tab1:
     if not df_main.empty:
         anios = sorted(df_main['invoice_date'].dt.year.unique(), reverse=True)
         anio_sel = st.selectbox("Año Fiscal", anios, key="kpi_anio")
@@ -169,6 +173,7 @@ with tab_kpis:
         venta = df_anio['Venta_Neta'].sum()
         meta = df_metas[df_metas['Mes'].dt.year == anio_sel]['Meta'].sum()
         
+        # TICKET PROMEDIO (Facturas Únicas)
         cant_facturas = df_anio['name'].nunique()
         ticket_promedio = (venta / cant_facturas) if cant_facturas > 0 else 0
         
@@ -199,127 +204,140 @@ with tab_kpis:
             fig_v.update_layout(height=400, margin=dict(l=10, r=10, t=30, b=10))
             st.plotly_chart(fig_v, use_container_width=True)
 
-# === PESTAÑA 2: PRODUCTOS ===
-with tab_prod:
-    if not df_prod.empty and not df_stock.empty:
+# === PESTAÑA 2: PRODUCTOS (VENTAS) ===
+with tab2:
+    if not df_prod.empty and not df_cat.empty:
         anios_p = sorted(df_prod['date'].dt.year.unique(), reverse=True)
         anio_p_sel = st.selectbox("Año de Análisis", anios_p, key="prod_anio")
         
+        # Cruzamos VENTAS con CATÁLOGO
         df_p_anio = df_prod[df_prod['date'].dt.year == anio_p_sel].copy()
-        df_p_anio = pd.merge(df_p_anio, df_stock[['ID_Producto', 'Tipo']], on='ID_Producto', how='left')
+        df_p_anio = pd.merge(df_p_anio, df_cat[['ID_Producto', 'Tipo']], on='ID_Producto', how='left')
         df_p_anio['Tipo'] = df_p_anio['Tipo'].fillna('Desconocido')
-        
-        # Filtro Consumibles
+
+        # FILTRO: Solo Almacenable y Servicio (Adiós Consumibles)
         df_p_anio = df_p_anio[df_p_anio['Tipo'].isin(['Almacenable', 'Servicio'])]
 
         col_tipo1, col_tipo2 = st.columns([1, 2])
         
         with col_tipo1:
             ventas_por_tipo = df_p_anio.groupby('Tipo')['Venta_Neta'].sum().reset_index()
-            fig_pie = px.pie(ventas_por_tipo, values='Venta_Neta', names='Tipo', hole=0.4, color_discrete_sequence=px.colors.qualitative.Set2)
-            fig_pie.update_layout(height=350, title_text="Mix de Venta")
+            fig_pie = px.pie(ventas_por_tipo, values='Venta_Neta', names='Tipo', hole=0.4, 
+                             color_discrete_sequence=px.colors.qualitative.Set2)
+            fig_pie.update_layout(height=350, title_text="Mix de Venta (Sin Consumibles)")
             st.plotly_chart(fig_pie, use_container_width=True)
             
         with col_tipo2:
-            st.markdown(f"**Top 10 Productos ({anio_p_sel})**")
+            st.markdown(f"**Top Productos Más Vendidos ({anio_p_sel})**")
             tipo_ver = st.radio("Ver:", ["Todos", "Almacenable", "Servicio"], horizontal=True)
             df_show = df_p_anio if tipo_ver == "Todos" else df_p_anio[df_p_anio['Tipo'] == tipo_ver]
+            
             top_prod = df_show.groupby('Producto')[['Venta_Neta', 'quantity']].sum().reset_index()
             top_10 = top_prod.sort_values('Venta_Neta', ascending=False).head(10).sort_values('Venta_Neta', ascending=True)
             
             fig_bar = px.bar(top_10, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s', color='Venta_Neta')
             fig_bar.update_layout(height=350, xaxis_title="Monto", yaxis_title="")
             st.plotly_chart(fig_bar, use_container_width=True)
+
+# === PESTAÑA 3: INVENTARIO (HUESOS) ===
+with tab3:
+    if not df_cat.empty:
+        st.subheader("⚠️ Detección de Baja Rotación (Productos Hueso)")
         
-        st.divider()
+        # Usamos el mismo año seleccionado en productos para la referencia de "Sin Venta"
+        # Si no se ha seleccionado, usamos el año actual
+        anio_hueso = anio_p_sel if 'anio_p_sel' in locals() else datetime.now().year
+        st.info(f"Analizando productos almacenables con STOCK > 0 que NO se han vendido en {anio_hueso}.")
+
+        # 1. Filtro de Stock Real
+        df_stock_real = df_cat[df_cat['Stock'] > 0].copy()
         
-        # ZOMBIES
-        st.subheader("⚠️ Alerta: Productos Hueso (Capital Atrapado)")
-        df_stock_real = df_stock[df_stock['Stock'] > 0].copy()
-        ids_vendidos = set(df_p_anio['ID_Producto'].unique())
+        # 2. Filtro de Ventas (Qué se vendió este año)
+        ids_vendidos = set(df_prod[df_prod['date'].dt.year == anio_hueso]['ID_Producto'].unique())
+        
+        # 3. Lógica Hueso: Tiene Stock Y NO está en vendidos
         df_zombies = df_stock_real[~df_stock_real['ID_Producto'].isin(ids_vendidos)].copy()
-        df_zombies = df_zombies[df_zombies['create_date'].dt.year < anio_p_sel]
+        
+        # 4. Lógica Novedad: Excluir creados este mismo año (No son hueso, son nuevos)
+        df_zombies = df_zombies[df_zombies['create_date'].dt.year < anio_hueso]
+        
+        # 5. Solo Almacenables
         df_zombies = df_zombies[df_zombies['Tipo'] == 'Almacenable']
+        
+        # Ordenar por dinero atrapado
         df_zombies = df_zombies.sort_values('Valor_Inventario', ascending=False)
         total_atrapado = df_zombies['Valor_Inventario'].sum()
         
         m1, m2 = st.columns(2)
-        m1.metric("Capital Inmovilizado (Costo)", f"₡ {total_atrapado/1e6:,.1f} M", help="Stock x Costo")
-        m2.metric("Items Hueso", len(df_zombies))
+        m1.metric("Dinero Atrapado (Costo)", f"₡ {total_atrapado/1e6:,.1f} M")
+        m2.metric("Items Sin Rotación", len(df_zombies))
         
-        st.write(f"Top Productos estancados en {anio_p_sel}:")
+        st.write("Top 50 Productos estancados:")
         st.dataframe(
             df_zombies[['Producto', 'create_date', 'Stock', 'Costo', 'Valor_Inventario']].head(50)
             .style.format({'Costo': '₡ {:,.0f}', 'Valor_Inventario': '₡ {:,.0f}', 'create_date': '{:%Y-%m-%d}'}),
             use_container_width=True
         )
 
-# === PESTAÑA 3: CLIENTES (MEJORADA) ===
-with tab_cli:
+# === PESTAÑA 4: CLIENTES ===
+with tab4:
     if not df_main.empty:
-        anio_c_sel = st.selectbox("Año", anios, key="cli_anio")
-        
-        # Datos Año Actual y Anterior
+        anio_c_sel = st.selectbox("Año de Análisis", anios, key="cli_anio")
         df_c_anio = df_main[df_main['invoice_date'].dt.year == anio_c_sel]
         df_c_ant = df_main[df_main['invoice_date'].dt.year == (anio_c_sel - 1)]
         
-        # Identificar Clientes
         cli_antes = set(df_c_ant[df_c_ant['Venta_Neta'] > 0]['Cliente'])
         cli_ahora = set(df_c_anio[df_c_anio['Venta_Neta'] > 0]['Cliente'])
         
-        # Cálculos de Pérdida y Ganancia
         lista_perdidos = list(cli_antes - cli_ahora)
         lista_nuevos = list(cli_ahora - cli_antes)
         
-        # Montos Financieros de esa pérdida/ganancia
+        # Cálculos de Montos
         monto_perdido = 0
         if lista_perdidos:
-            df_lost = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]
-            monto_perdido = df_lost['Venta_Neta'].sum()
+            monto_perdido = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]['Venta_Neta'].sum()
             
         monto_nuevo = 0
         if lista_nuevos:
-            df_new = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]
-            monto_nuevo = df_new['Venta_Neta'].sum()
+            monto_nuevo = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]['Venta_Neta'].sum()
         
-        # KPIs Clientes
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Clientes Activos", len(cli_ahora))
+        k1.metric("Total Clientes", len(cli_ahora))
         k2.metric("Clientes Nuevos", len(lista_nuevos))
-        k3.metric("Venta de Nuevos", f"₡ {monto_nuevo/1e6:,.1f} M", help="Lo que han comprado los clientes nuevos este año")
-        k4.metric("Oportunidad Perdida", f"₡ {monto_perdido/1e6:,.1f} M", help="Lo que compraron el año pasado los clientes que se fueron", delta_color="inverse")
+        k3.metric("Venta de Nuevos", f"₡ {monto_nuevo/1e6:,.1f} M", help="Ingreso por clientes captados este año")
+        k4.metric("Venta Perdida (Churn)", f"₡ {monto_perdido/1e6:,.1f} M", help="Lo que compraron el año pasado los que se fueron", delta_color="inverse")
         
         st.divider()
         
-        col_new, col_lost = st.columns(2)
+        c_top, c_analisis = st.columns([1, 1])
         
-        with col_new:
-            st.subheader("🌱 Top Clientes Nuevos")
-            if lista_nuevos:
-                df_new_rank = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]
-                top_new = df_new_rank.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(20)
-                st.dataframe(top_new.to_frame("Venta Acumulada").style.format("₡ {:,.0f}"), use_container_width=True)
-            else:
-                st.info("No hay clientes nuevos en este periodo.")
-                
-        with col_lost:
+        with c_top:
+            st.subheader("🏆 Top 10 Clientes")
+            top_10_cli = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10)
+            st.dataframe(top_10_cli.to_frame("Compras").style.format("₡ {:,.0f}"), use_container_width=True)
+            
+        with c_analisis:
             st.subheader("⚠️ Top Clientes Perdidos")
             if lista_perdidos:
-                df_lost_rank = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]
-                top_lost = df_lost_rank.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(20)
-                st.dataframe(top_lost.to_frame("Compra Año Anterior").style.format("₡ {:,.0f}"), use_container_width=True)
+                df_lost = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]
+                # Ordenar por quién compraba más
+                top_lost = df_lost.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10)
+                st.dataframe(top_lost.to_frame("Compró Año Pasado").style.format("₡ {:,.0f}"), use_container_width=True)
             else:
-                st.success("¡Felicidades! Retención del 100%.")
+                st.success("Retención del 100%.")
 
+        st.subheader("🌱 Top Clientes Nuevos")
+        if lista_nuevos:
+            df_new = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]
+            top_new = df_new.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10)
+            st.dataframe(top_new.to_frame("Venta Acumulada").style.format("₡ {:,.0f}"), use_container_width=True)
+        
         st.divider()
         
-        # Gráfico de Dispersión
-        st.subheader("🔎 Matriz de Valor: Frecuencia vs Monto")
+        # Matriz
+        st.subheader("🔎 Matriz de Valor")
         scatter_data = df_c_anio.groupby('Cliente').agg({'Venta_Neta': 'sum', 'name': 'nunique'}).reset_index()
         scatter_data.columns = ['Cliente', 'Monto', 'Frecuencia']
-        # Fix tamaño burbujas
         scatter_data['Size'] = scatter_data['Monto'].abs().replace(0, 1)
         
-        fig_s = px.scatter(scatter_data, x='Frecuencia', y='Monto', size='Size', 
-                           color='Monto', hover_name='Cliente', color_continuous_scale='RdBu')
-        st.plotly_chart(fig_s, use_container_width=True)
+        fig_s = px.scatter
