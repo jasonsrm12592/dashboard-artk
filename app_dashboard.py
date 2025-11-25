@@ -63,8 +63,7 @@ def cargar_datos_generales():
             
             # Limpieza
             df = df[~df['name'].str.contains("WT-", case=False, na=False)]
-            
-            # FILTRO CLIENTES INDESEADOS (Ajusta aquí si necesitas borrar a Alrotek u otros)
+            # Filtro Anti-Autofacturación (Opcional, descomentar si es necesario)
             # df = df[~df['Cliente'].str.contains("ALROTEK", case=False, na=False)]
             
         return df
@@ -107,17 +106,29 @@ def cargar_detalle_productos():
 
 @st.cache_data(ttl=3600)
 def cargar_inventario():
-    """Descarga STOCK + TIPO DE PRODUCTO + FECHA CREACIÓN"""
+    """Descarga STOCK y filtra KITS (Listas fantasma)"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Traemos todo lo activo, aunque tenga stock 0 (para saber el tipo)
-        dominio = [['active', '=', True]]
-        
-        # SOLICITUD DE CAMPOS NUEVOS: detailed_type (Servicio/Producto) y create_date
-        campos = ['name', 'qty_available', 'list_price', 'standard_price', 'detailed_type', 'create_date']
+        # 1. DETECTAR KITS (Para excluirlos)
+        # Buscamos en mrp.bom (Listas de Materiales) las que son tipo 'phantom' (Kit)
+        try:
+            ids_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
+            kits_data = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'read', [ids_kits], {'fields': ['product_tmpl_id']})
+            
+            # Obtenemos los IDs de las PLANTILLAS de producto que son kits
+            # Odoo devuelve [ID, Nombre], tomamos el ID [0]
+            ids_templates_kit = [k['product_tmpl_id'][0] for k in kits_data if k['product_tmpl_id']]
+        except Exception:
+            # Si no hay módulo de fabricación instalado o falla, asumimos lista vacía
+            ids_templates_kit = []
+
+        # 2. DESCARGAR INVENTARIO
+        dominio = [['active', '=', True], ['qty_available', '>', 0]]
+        # Pedimos 'product_tmpl_id' para poder cruzar con la lista de Kits
+        campos = ['name', 'qty_available', 'list_price', 'standard_price', 'detailed_type', 'create_date', 'product_tmpl_id']
         
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': campos})
@@ -128,13 +139,18 @@ def cargar_inventario():
             df['Valor_Inventario'] = df['qty_available'] * df['standard_price']
             df.rename(columns={'id': 'ID_Producto', 'name': 'Producto', 'qty_available': 'Stock'}, inplace=True)
             
-            # Mapeo de Tipos (Odoo usa nombres en inglés/código)
-            tipo_map = {
-                'product': 'Almacenable',
-                'service': 'Servicio',
-                'consu': 'Consumible'
-            }
-            # Usamos .get por si viene un tipo nuevo o vacío
+            # Extraer ID del Template para filtrar Kits
+            df['ID_Template'] = df['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
+            
+            # --- FILTRO MAESTRO DE KITS ---
+            # Si el ID del Template está en la lista de Kits, lo borramos.
+            if ids_templates_kit:
+                cant_antes = len(df)
+                df = df[~df['ID_Template'].isin(ids_templates_kit)]
+                # st.toast(f"Se ocultaron {cant_antes - len(df)} Kits del análisis de inventario.") 
+
+            # Mapeo de Tipos
+            tipo_map = {'product': 'Almacenable', 'service': 'Servicio', 'consu': 'Consumible'}
             df['Tipo'] = df['detailed_type'].map(tipo_map).fillna('Otro')
             
         return df
@@ -154,10 +170,10 @@ st.title("🚀 Monitor Comercial ALROTEK")
 
 tab_kpis, tab_prod, tab_cli = st.tabs(["📊 Visión General", "📦 Productos & Inventario", "👥 Análisis Clientes"])
 
-with st.spinner('Procesando datos (Ventas + Inventario + Tipos)...'):
+with st.spinner('Procesando datos en tiempo real...'):
     df_main = cargar_datos_generales()
-    df_prod = cargar_detalle_productos() # Ventas detalle
-    df_stock = cargar_inventario()       # Catálogo maestro
+    df_prod = cargar_detalle_productos()
+    df_stock = cargar_inventario()
     df_metas = cargar_metas()
 
 # === PESTAÑA 1: GENERAL ===
@@ -170,7 +186,7 @@ with tab_kpis:
         venta = df_anio['Venta_Neta'].sum()
         meta = df_metas[df_metas['Mes'].dt.year == anio_sel]['Meta'].sum()
         
-        # --- CÁLCULO TICKET PROMEDIO (Recuperado) ---
+        # Ticket Promedio (Calculado correctamente sobre facturas únicas)
         cant_facturas = df_anio['name'].nunique()
         ticket_promedio = (venta / cant_facturas) if cant_facturas > 0 else 0
         
@@ -178,7 +194,7 @@ with tab_kpis:
         c1.metric("Venta Total", f"₡ {venta/1e6:,.1f} M")
         c2.metric("Meta Anual", f"₡ {meta/1e6:,.1f} M", f"Falta: {(meta-venta)/1e6:,.1f}M")
         c3.metric("Cumplimiento", f"{(venta/meta*100) if meta>0 else 0:.1f}%")
-        c4.metric("Ticket Promedio", f"₡ {ticket_promedio:,.0f}", f"{cant_facturas} Facturas")
+        c4.metric("Ticket Promedio", f"₡ {ticket_promedio:,.0f}", f"{cant_facturas} Ops")
 
         st.divider()
         
@@ -201,36 +217,29 @@ with tab_kpis:
             fig_v.update_layout(height=400, margin=dict(l=10, r=10, t=30, b=10))
             st.plotly_chart(fig_v, use_container_width=True)
 
-# === PESTAÑA 2: PRODUCTOS + ZOMBIES INTELIGENTES ===
+# === PESTAÑA 2: PRODUCTOS ===
 with tab_prod:
     if not df_prod.empty and not df_stock.empty:
         anios_p = sorted(df_prod['date'].dt.year.unique(), reverse=True)
         anio_p_sel = st.selectbox("Año de Análisis", anios_p, key="prod_anio")
         
-        # Cruzamos las ventas con el catálogo para saber el TIPO de cada venta
-        # (Merge left para traer 'Tipo' desde df_stock hacia df_p_anio)
         df_p_anio = df_prod[df_prod['date'].dt.year == anio_p_sel].copy()
         df_p_anio = pd.merge(df_p_anio, df_stock[['ID_Producto', 'Tipo']], on='ID_Producto', how='left')
         df_p_anio['Tipo'] = df_p_anio['Tipo'].fillna('Desconocido')
 
-        # 1. ANÁLISIS POR TIPO (Servicio vs Almacenable)
         st.subheader("📦 Composición de la Venta")
         col_tipo1, col_tipo2 = st.columns([1, 2])
         
         with col_tipo1:
-            # Gráfico de Dona
             ventas_por_tipo = df_p_anio.groupby('Tipo')['Venta_Neta'].sum().reset_index()
             fig_pie = px.pie(ventas_por_tipo, values='Venta_Neta', names='Tipo', hole=0.4, 
                              color_discrete_sequence=px.colors.qualitative.Set2)
-            fig_pie.update_layout(height=350, title_text="Ventas por Categoría")
+            fig_pie.update_layout(height=350, title_text="Venta por Categoría")
             st.plotly_chart(fig_pie, use_container_width=True)
             
         with col_tipo2:
-            # Top Productos
             st.markdown(f"**Top 10 Productos ({anio_p_sel})**")
-            # Filtro opcional por tipo
-            tipo_filtro = st.radio("Filtrar lista por:", ["Todos", "Almacenable", "Servicio", "Consumible"], horizontal=True)
-            
+            tipo_filtro = st.radio("Filtrar:", ["Todos", "Almacenable", "Servicio", "Consumible"], horizontal=True)
             df_show = df_p_anio if tipo_filtro == "Todos" else df_p_anio[df_p_anio['Tipo'] == tipo_filtro]
             
             top_prod = df_show.groupby('Producto')[['Venta_Neta', 'quantity']].sum().reset_index()
@@ -242,38 +251,29 @@ with tab_prod:
         
         st.divider()
         
-        # 2. ANÁLISIS DE BAJA ROTACIÓN (ZOMBIES MEJORADO) 🧟‍♂️
-        st.subheader("⚠️ Alerta: Productos Hueso (Baja Rotación)")
-        
-        # Lógica:
-        # a) Tienen Stock > 0
-        # b) NO se vendieron en el año seleccionado
-        # c) NO son nuevos (Creados antes de este año)
+        # 2. ANÁLISIS DE HUESOS (ZOMBIES)
+        st.subheader("⚠️ Alerta: Productos Hueso (Stock quieto)")
         
         productos_vendidos_ids = set(df_p_anio['ID_Producto'].unique())
-        
-        # Filtro inicial: Tienen stock y no se vendieron
         df_zombies = df_stock[~df_stock['ID_Producto'].isin(productos_vendidos_ids)].copy()
         
-        # FILTRO DE NOVEDAD: Excluir los creados en el mismo año de análisis
-        # (Si analizo 2025, borro los creados en 2025 porque son nuevos, no huesos)
+        # FILTRO 1: NOVEDAD (Excluir creados este año)
         df_zombies = df_zombies[df_zombies['create_date'].dt.year < anio_p_sel]
         
-        # Solo Almacenables (Los servicios no son "hueso")
+        # FILTRO 2: TIPO (Solo Almacenables, ignorar servicios y consumibles)
         df_zombies = df_zombies[df_zombies['Tipo'] == 'Almacenable']
         
-        # Ordenar por dinero atrapado
+        # Ordenar
         df_zombies = df_zombies.sort_values('Valor_Inventario', ascending=False)
-        
         total_atrapado = df_zombies['Valor_Inventario'].sum()
         
         m1, m2 = st.columns(2)
-        m1.metric("Capital Inmovilizado (Costo)", f"₡ {total_atrapado/1e6:,.1f} M", help="Solo productos almacenables antiguos sin venta este año")
-        m2.metric("Items sin rotación", len(df_zombies))
+        m1.metric("Capital Inmovilizado (Hueso)", f"₡ {total_atrapado/1e6:,.1f} M", help="Almacenables antiguos sin venta este año")
+        m2.metric("Items únicos sin rotación", len(df_zombies))
         
-        st.write(f"Top Productos almacenables antiguos sin venta en {anio_p_sel}:")
+        st.write(f"Top Almacenables antiguos (creados antes de {anio_p_sel}) sin venta en {anio_p_sel}:")
         st.dataframe(
-            df_zombies[['Producto', 'Tipo', 'create_date', 'Stock', 'list_price', 'Valor_Inventario']].head(50)
+            df_zombies[['Producto', 'create_date', 'Stock', 'list_price', 'Valor_Inventario']].head(50)
             .style.format({'list_price': '₡ {:,.0f}', 'Valor_Inventario': '₡ {:,.0f}', 'create_date': '{:%Y-%m-%d}'}),
             use_container_width=True
         )
@@ -285,7 +285,6 @@ with tab_cli:
         df_c_anio = df_main[df_main['invoice_date'].dt.year == anio_c_sel]
         df_c_ant = df_main[df_main['invoice_date'].dt.year == (anio_c_sel - 1)]
         
-        # Churn Analysis
         cli_antes = set(df_c_ant[df_c_ant['Venta_Neta'] > 0]['Cliente'])
         cli_ahora = set(df_c_anio[df_c_anio['Venta_Neta'] > 0]['Cliente'])
         perdidos = list(cli_antes - cli_ahora)
