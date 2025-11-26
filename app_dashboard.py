@@ -277,11 +277,14 @@ with tab_inv:
         m1.metric("Capital Inmovilizado", f"₡ {total_atrapado/1e6:,.1f} M")
         m2.metric("Items Sin Rotación", len(df_zombies))
         
-        st.dataframe(
-            df_zombies[['Producto', 'create_date', 'Stock', 'Costo', 'Valor_Inventario']].head(50)
-            .style.format({'Costo': '₡ {:,.0f}', 'Valor_Inventario': '₡ {:,.0f}', 'create_date': '{:%Y-%m-%d}'}),
-            use_container_width=True
-        )
+        # GRÁFICO ZOMBIES (Nuevo)
+        st.markdown("**Top 15 Productos con Mayor Capital Atrapado**")
+        top_zombies = df_zombies.head(15).sort_values('Valor_Inventario', ascending=True) # Ordenar para gráfico H
+        
+        fig_z = px.bar(top_zombies, x='Valor_Inventario', y='Producto', orientation='h', 
+                       text_auto='.2s', color='Valor_Inventario', color_continuous_scale='Reds')
+        fig_z.update_layout(height=500, xaxis_title="Monto Atrapado (Costo)")
+        st.plotly_chart(fig_z, use_container_width=True)
 
 # === PESTAÑA 4: CLIENTES ===
 with tab_cli:
@@ -313,7 +316,7 @@ with tab_cli:
         st.divider()
         
         # Descargas Clientes
-        st.subheader("📥 Descargar Reportes de Clientes")
+        st.subheader("📥 Descargas Disponibles")
         col_d1, col_d2, col_d3 = st.columns(3)
         
         df_top_all = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
@@ -334,31 +337,33 @@ with tab_cli:
 
         st.divider()
         
+        # GRÁFICOS CLIENTES
         c_top, c_analisis = st.columns([1, 1])
+        
         with c_top:
             st.subheader("🏆 Top 10 Clientes")
-            top_10_cli = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10)
-            st.dataframe(top_10_cli.to_frame("Compras").style.format("₡ {:,.0f}"), use_container_width=True)
+            top_10_cli = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
+            fig_top = px.bar(top_10_cli, x='Venta_Neta', y=top_10_cli.index, orientation='h', text_auto='.2s', color='Venta_Neta')
+            fig_top.update_layout(height=400)
+            st.plotly_chart(fig_top, use_container_width=True)
             
         with c_analisis:
-            st.subheader("⚠️ Top Clientes Perdidos")
+            st.subheader("⚠️ Top 10 Clientes Perdidos")
             if lista_perdidos:
                 df_lost = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]
-                top_lost = df_lost.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10)
-                st.dataframe(top_lost.to_frame("Compró Año Pasado").style.format("₡ {:,.0f}"), use_container_width=True)
+                top_lost = df_lost.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
+                fig_lost = px.bar(top_lost, x='Venta_Neta', y=top_lost.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])
+                fig_lost.update_layout(height=400, xaxis_title="Compra Año Anterior")
+                st.plotly_chart(fig_lost, use_container_width=True)
             else:
                 st.success("Retención del 100%.")
 
-        st.subheader("🌱 Gráfico Clientes Nuevos")
+        st.subheader("🌱 Top 10 Clientes Nuevos")
         if lista_nuevos:
-            df_new_rank = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]
-            top_new = df_new_rank.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(15)
-            # Gráfico de Clientes Nuevos
-            fig_new = px.bar(top_new, x=top_new.values, y=top_new.index, orientation='h', text_auto='.2s', color=top_new.values)
-            fig_new.update_layout(xaxis_title="Venta Acumulada", yaxis_title="", height=450)
+            df_new = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]
+            top_new = df_new.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
+            fig_new = px.bar(top_new, x='Venta_Neta', y=top_new.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#2ecc71'])
+            fig_new.update_layout(height=400, xaxis_title="Venta Acumulada")
             st.plotly_chart(fig_new, use_container_width=True)
-            
-            with st.expander("Ver detalle en lista"):
-                st.dataframe(top_new.to_frame("Venta Acumulada").style.format("₡ {:,.0f}"), use_container_width=True)
         else:
             st.info("No hay clientes nuevos en este periodo.")
