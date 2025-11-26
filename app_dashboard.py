@@ -30,14 +30,14 @@ hide_st_style = """
             .kpi-value { font-size: 1.2rem; font-weight: bold; margin-top: 5px; }
             .kpi-note { font-size: 0.7rem; opacity: 0.9; margin-top: 5px; font-style: italic;}
             
-            /* COLORES SEMÁFORO Y CATEGORÍAS */
+            /* COLORES */
             .bg-green { background-color: #27ae60; }   /* Ventas */
-            .bg-orange { background-color: #e67e22; }  /* Suministros/Mercadería */
+            .bg-orange { background-color: #e67e22; }  /* Suministros */
             .bg-yellow { background-color: #f1c40f; color: #333 !important; }  /* WIP */
-            .bg-blue { background-color: #2980b9; }    /* Instalación/Horas */
+            .bg-blue { background-color: #2980b9; }    /* Instalación */
             .bg-purple { background-color: #8e44ad; }  /* Inventario */
             .bg-red { background-color: #c0392b; }     /* Provisiones */
-            .bg-teal { background-color: #16a085; }    /* Compras Pendientes */
+            .bg-teal { background-color: #16a085; }    /* Compras */
             .bg-gray { background-color: #7f8c8d; }    /* Ajustes */
             </style>
             """
@@ -51,20 +51,16 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # --- DEFINICIÓN DE IDs CONTABLES (ACTUALIZADO v3.5) ---
+    # --- IDs CONTABLES EXACTOS ---
+    IDS_INGRESOS = [580, 384] # 580: Venta Bienes, 384: Servicios
     
-    # 1. Ventas
-    IDS_INGRESOS = [580, 384] # 580: Bienes, 384: Servicios
-    
-    # 2. Costos y Gastos
     ID_WIP = 503
     ID_PROVISION_PROY = 504
     ID_COSTO_INSTALACION = 399
     ID_SUMINISTROS_PROY = 400
     ID_AJUSTES_INV = 395
-    ID_COSTO_RETAIL = 76 # Mantenemos por si acaso hay venta mostrador
+    ID_COSTO_RETAIL = 76 
     
-    # Lista maestra para descargar del P&L
     TODOS_LOS_IDS = IDS_INGRESOS + [ID_WIP, ID_PROVISION_PROY, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_AJUSTES_INV, ID_COSTO_RETAIL]
     
 except Exception:
@@ -231,7 +227,6 @@ def cargar_pnl_contable(anio):
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Filtro: IDs Contables solicitados + Analítica presente
         dominio_pnl = [['account_id', 'in', TODOS_LOS_IDS], 
                        ['date', '>=', f'{anio}-01-01'], 
                        ['date', '<=', f'{anio}-12-31'], 
@@ -244,9 +239,12 @@ def cargar_pnl_contable(anio):
         df = pd.DataFrame(registros)
         if not df.empty:
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
-            df['Monto_Neto'] = df['credit'] - df['debit'] # Ingreso positivo, Gasto negativo
             
-            # --- CLASIFICACIÓN V3.5 ---
+            # CALCULO DE NETO (Crédito - Débito)
+            # Para Ventas: Crédito > Débito -> Neto Positivo
+            # Para Costos: Débito > Crédito -> Neto Negativo
+            df['Monto_Neto'] = df['credit'] - df['debit']
+            
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -384,10 +382,6 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
 
 @st.cache_data(ttl=900)
 def cargar_compras_pendientes(ids_cuentas_analiticas):
-    """
-    NUEVA FUNCIÓN V3.5: Busca OCs confirmadas pero no facturadas.
-    Calcula el monto pendiente = (qty_ordered - qty_invoiced) * price_unit
-    """
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -397,10 +391,9 @@ def cargar_compras_pendientes(ids_cuentas_analiticas):
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
         
-        # Buscar líneas de compra
         dominio = [
             ['account_analytic_id', 'in', ids_clean],
-            ['state', 'in', ['purchase', 'done']], # Confirmado o Bloqueado
+            ['state', 'in', ['purchase', 'done']], 
             ['company_id', '=', COMPANY_ID]
         ]
         
@@ -410,18 +403,13 @@ def cargar_compras_pendientes(ids_cuentas_analiticas):
         
         df = pd.DataFrame(registros)
         if not df.empty:
-            # Calcular pendiente
             df['qty_pending'] = df['product_qty'] - df['qty_invoiced']
-            df = df[df['qty_pending'] > 0] # Solo lo que falta
-            
+            df = df[df['qty_pending'] > 0]
             if df.empty: return pd.DataFrame()
-            
             df['Monto_Pendiente'] = df['qty_pending'] * df['price_unit']
             df['Proveedor'] = df['partner_id'].apply(lambda x: x[1] if x else "-")
             df['OC'] = df['order_id'].apply(lambda x: x[1] if x else "-")
-            
             return df[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
-            
         return pd.DataFrame()
     except Exception: return pd.DataFrame()
 
@@ -435,7 +423,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v3.5")
+st.title("🚀 Monitor Comercial ALROTEK v3.6")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -643,16 +631,18 @@ with tab_renta:
             ].copy()
             
             if not df_filtered.empty:
-                # KPIs CONTABLES (CON IDs ESPECÍFICOS SOLICITADOS)
-                total_ventas = df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum()
+                # --- CÁLCULO DE TOTALES (CORREGIDO V3.6: SALDO NETO LUEGO ABSOLUTO) ---
+                # Saldo Neto = Crédito - Débito
+                # Para Ventas: Saldo positivo. Para Costos: Saldo negativo.
+                # Aplicamos abs() al FINAL para mostrar siempre positivo en KPI.
                 
-                # Costos Absolutos
-                total_instalacion = df_filtered[df_filtered['Clasificacion'] == 'Instalación']['Monto_Neto'].abs().sum()
-                total_suministros = df_filtered[df_filtered['Clasificacion'] == 'Suministros']['Monto_Neto'].abs().sum()
-                total_wip = df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].abs().sum()
-                total_provision = df_filtered[df_filtered['Clasificacion'] == 'Provisión']['Monto_Neto'].abs().sum()
+                total_ventas = abs(df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum())
+                total_instalacion = abs(df_filtered[df_filtered['Clasificacion'] == 'Instalación']['Monto_Neto'].sum())
+                total_suministros = abs(df_filtered[df_filtered['Clasificacion'] == 'Suministros']['Monto_Neto'].sum())
+                total_wip = abs(df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum())
+                total_provision = abs(df_filtered[df_filtered['Clasificacion'] == 'Provisión']['Monto_Neto'].sum())
                 
-                # Ajustes (Mantiene Signo)
+                # Ajustes mantiene signo (puede ser + o -)
                 total_ajustes = df_filtered[df_filtered['Clasificacion'] == 'Ajustes Inv']['Monto_Neto'].sum()
                 
                 ids_cuentas_analiticas = df_filtered['id_cuenta_analitica'].dropna().unique().tolist()
@@ -666,11 +656,10 @@ with tab_renta:
                 df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuentas_analiticas)
                 total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
                 
-                # Compras Pendientes (NUEVO)
+                # Compras Pendientes
                 df_compras = cargar_compras_pendientes(ids_cuentas_analiticas)
                 total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
                 
-                # Feedback Bodegas
                 txt_bodegas = "Sin ubicación asignada"
                 color_bg = "bg-purple"
                 if status_stock == "OK" or status_stock == "NO_STOCK":
@@ -680,14 +669,14 @@ with tab_renta:
                 elif status_stock == "NO_BODEGA":
                     color_bg = "bg-gray"
                 
-                # --- FILA 1: PRINCIPALES ---
+                # --- FILA 1 ---
                 k1, k2, k3, k4 = st.columns(4)
                 with k1: card_kpi("Ventas", total_ventas, "bg-green")
                 with k2: card_kpi("Instalación", total_instalacion, "bg-blue")
                 with k3: card_kpi("Suministros", total_suministros, "bg-orange")
                 with k4: card_kpi("WIP Acumulado", total_wip, "bg-yellow")
                 
-                # --- FILA 2: SECUNDARIOS ---
+                # --- FILA 2 ---
                 k5, k6, k7, k8 = st.columns(4)
                 with k5: card_kpi("Provisiones", total_provision, "bg-red")
                 with k6: card_kpi("Ajustes Inv.", total_ajustes, "bg-gray")
@@ -696,7 +685,6 @@ with tab_renta:
                 
                 st.divider()
                 
-                # --- SECCIONES DETALLE ---
                 c_horas, c_stock = st.columns(2)
                 with c_horas:
                     st.markdown("##### 🕒 Desglose de Horas (Shadow Cost)")
