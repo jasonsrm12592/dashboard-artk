@@ -51,8 +51,8 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # --- IDs CONTABLES ---
-    IDS_INGRESOS = [580, 384] 
+    # --- IDs CONTABLES EXACTOS ---
+    IDS_INGRESOS = [580, 384] # 580: Venta Bienes, 384: Servicios
     
     ID_WIP = 503
     ID_PROVISION_PROY = 504
@@ -205,17 +205,12 @@ def cargar_estructura_analitica():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
-        # Descarga Planes
         ids_plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'search', [[['id', '!=', 0]]])
         plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'read', [ids_plans], {'fields': ['name']})
         df_plans = pd.DataFrame(plans).rename(columns={'id': 'plan_id', 'name': 'Plan_Nombre'})
-        
-        # Descarga Cuentas (TODAS, para llenar el selector)
         ids_acc = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'search', [[['active', 'in', [True, False]]]])
         accounts = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'read', [ids_acc], {'fields': ['name', 'plan_id']})
         df_acc = pd.DataFrame(accounts)
-        
         if not df_acc.empty and not df_plans.empty:
             df_acc['plan_id'] = df_acc['plan_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else (x if x else 0))
             df_full = pd.merge(df_acc, df_plans, on='plan_id', how='left')
@@ -244,10 +239,12 @@ def cargar_pnl_contable(anio):
         df = pd.DataFrame(registros)
         if not df.empty:
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
-            df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
+            
+            # CALCULO DE NETO (Crédito - Débito)
+            # Para Ventas: Crédito > Débito -> Neto Positivo
+            # Para Costos: Débito > Crédito -> Neto Negativo
             df['Monto_Neto'] = df['credit'] - df['debit']
             
-            # --- CLASIFICACIÓN V3.8 (CORREGIDA) ---
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -256,7 +253,7 @@ def cargar_pnl_contable(anio):
                 if id_acc == ID_COSTO_INSTALACION: return "Instalación"
                 if id_acc == ID_SUMINISTROS_PROY: return "Suministros"
                 if id_acc == ID_AJUSTES_INV: return "Ajustes Inv"
-                if id_acc == ID_COSTO_RETAIL: return "Costo Mercadería" # Coincide con KPI
+                if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
                 return "Otro"
                 
             df['Clasificacion'] = df.apply(clasificar, axis=1)
@@ -426,7 +423,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v3.8")
+st.title("🚀 Monitor Comercial ALROTEK v3.6")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -604,109 +601,131 @@ with tab_renta:
     with st.spinner('Analizando P&L...'):
         df_pnl = cargar_pnl_contable(anio_r_sel)
     
-    if not df_analitica.empty:
-        # Usamos df_analitica para el selector, NO df_pnl (DESACOPLE CLAVE)
-        mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Plan_Nombre']))
-        mapa_nombres = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Cuenta_Nombre']))
-        
-        # Llenar selector
-        lista_planes = sorted(list(set(mapa_cuentas.values())))
-        
+    if not df_pnl.empty:
+        if not df_analitica.empty:
+            mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Plan_Nombre']))
+            mapa_nombres = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Cuenta_Nombre']))
+            df_pnl['Plan_Negocio'] = df_pnl['id_cuenta_analitica'].map(mapa_cuentas).fillna("Sin Plan")
+            df_pnl['Cuenta_Analitica_Nombre'] = df_pnl['id_cuenta_analitica'].map(mapa_nombres).fillna("-")
+        else:
+            df_pnl['Plan_Negocio'] = "Sin Estructura"
+            df_pnl['Cuenta_Analitica_Nombre'] = "-"
+
         st.subheader("🕵️ Buscador de Proyectos")
         c_filt1, c_filt2 = st.columns(2)
         with c_filt1:
+            lista_planes = sorted(df_pnl['Plan_Negocio'].unique().astype(str))
             planes_sel = st.multiselect("1. Selecciona Planes:", lista_planes, default=[])
-            
-        if planes_sel:
-            # Filtrar cuentas que pertenecen a esos planes
-            ids_cuentas_posibles = [id_c for id_c, plan in mapa_cuentas.items() if plan in planes_sel]
-            nombres_cuentas_posibles = [mapa_nombres[id_c] for id_c in ids_cuentas_posibles]
-            
+        
+        if not planes_sel:
+            st.info("👈 Selecciona un PLAN para ver el desglose detallado.")
+        else:
+            df_temp = df_pnl[df_pnl['Plan_Negocio'].isin(planes_sel)]
             with c_filt2:
-                cuentas_sel_nombres = st.multiselect("2. Selecciona Analíticas (Opcional):", sorted(nombres_cuentas_posibles), default=sorted(nombres_cuentas_posibles))
+                lista_cuentas = sorted(df_temp['Cuenta_Analitica_Nombre'].unique().astype(str))
+                cuentas_sel = st.multiselect("2. Selecciona Analíticas (Opcional):", lista_cuentas, default=lista_cuentas)
             
-            # Convertir Nombres seleccionados back to IDs
-            ids_seleccionados = [id_c for id_c, nombre in mapa_nombres.items() if nombre in cuentas_sel_nombres]
+            df_filtered = df_pnl[
+                (df_pnl['Plan_Negocio'].isin(planes_sel)) & 
+                (df_pnl['Cuenta_Analitica_Nombre'].isin(cuentas_sel))
+            ].copy()
             
-            # AHORA FILTRAMOS EL P&L CON ESTOS IDs
-            df_filtered = pd.DataFrame()
-            if not df_pnl.empty:
-                df_filtered = df_pnl[df_pnl['id_cuenta_analitica'].isin(ids_seleccionados)].copy()
-            
-            # --- CALCULOS ---
-            # 1. Contables (Si hay datos)
             if not df_filtered.empty:
+                # --- CÁLCULO DE TOTALES (CORREGIDO V3.6: SALDO NETO LUEGO ABSOLUTO) ---
+                # Saldo Neto = Crédito - Débito
+                # Para Ventas: Saldo positivo. Para Costos: Saldo negativo.
+                # Aplicamos abs() al FINAL para mostrar siempre positivo en KPI.
+                
                 total_ventas = abs(df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum())
                 total_instalacion = abs(df_filtered[df_filtered['Clasificacion'] == 'Instalación']['Monto_Neto'].sum())
                 total_suministros = abs(df_filtered[df_filtered['Clasificacion'] == 'Suministros']['Monto_Neto'].sum())
                 total_wip = abs(df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum())
                 total_provision = abs(df_filtered[df_filtered['Clasificacion'] == 'Provisión']['Monto_Neto'].sum())
+                
+                # Ajustes mantiene signo (puede ser + o -)
                 total_ajustes = df_filtered[df_filtered['Clasificacion'] == 'Ajustes Inv']['Monto_Neto'].sum()
-            else:
-                total_ventas = total_instalacion = total_suministros = total_wip = total_provision = total_ajustes = 0
-            
-            # 2. Extracontables (Siempre se buscan con los IDs seleccionados)
-            df_horas_detalle = cargar_detalle_horas_estructura(ids_seleccionados)
-            total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
-            
-            df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
-            total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
-            
-            df_compras = cargar_compras_pendientes(ids_seleccionados)
-            total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
-            
-            # 3. Renderizar
-            txt_bodegas = "Sin ubicación asignada"
-            color_bg = "bg-purple"
-            if status_stock == "OK" or status_stock == "NO_STOCK":
-                txt_bodegas = f"Encontradas: {', '.join(bodegas_encontradas)}"
-            elif "ERR" in status_stock:
-                color_bg = "bg-red"
-            elif status_stock == "NO_BODEGA":
-                color_bg = "bg-gray"
-            
-            k1, k2, k3, k4 = st.columns(4)
-            with k1: card_kpi("Ventas", total_ventas, "bg-green")
-            with k2: card_kpi("Instalación", total_instalacion, "bg-blue")
-            with k3: card_kpi("Suministros", total_suministros, "bg-orange")
-            with k4: card_kpi("WIP Acumulado", total_wip, "bg-yellow")
-            
-            k5, k6, k7, k8 = st.columns(4)
-            with k5: card_kpi("Provisiones", total_provision, "bg-red")
-            with k6: card_kpi("Ajustes Inv.", total_ajustes, "bg-gray")
-            with k7: card_kpi("Inventario Sitio", total_stock_sitio, color_bg, nota=txt_bodegas)
-            with k8: card_kpi("Compras Pendientes", total_compras_pendientes, "bg-teal")
-            
-            st.divider()
-            c_horas, c_stock = st.columns(2)
-            with c_horas:
-                st.markdown("##### 🕒 Desglose de Horas")
-                if not df_horas_detalle.empty:
-                    resumen_horas = df_horas_detalle.groupby(['Tipo_Hora', 'Multiplicador'])[['Horas', 'Costo']].sum().reset_index()
-                    st.dataframe(resumen_horas, column_config={"Costo": st.column_config.NumberColumn(format="₡ %.2f"), "Multiplicador": st.column_config.NumberColumn(format="x %.1f")}, hide_index=True, use_container_width=True)
-                else: st.caption("Sin registros.")
-            
-            with c_stock:
-                st.markdown("##### 📦 Detalle Inventario / Compras")
-                tab_inv_det, tab_com_det = st.tabs(["Inventario Físico", "Compras Pendientes"])
-                with tab_inv_det:
-                    if not df_stock_sitio.empty:
-                        st.dataframe(df_stock_sitio[['pname', 'quantity', 'Valor_Total']], column_config={"pname": "Producto", "Valor_Total": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
-                    else: st.caption(f"Estado: {status_stock}")
-                with tab_com_det:
-                    if not df_compras.empty:
-                        st.dataframe(df_compras, column_config={"Monto_Pendiente": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
-                    else: st.caption("Todo facturado.")
-            
-            st.divider()
-            st.markdown("**Detalle Movimientos Contables (P&L)**")
-            if not df_filtered.empty:
-                st.dataframe(df_filtered[['date', 'name', 'Nombre_Cuenta', 'Clasificacion', 'Monto_Neto']].sort_values('date', ascending=False), column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")}, use_container_width=True, hide_index=True)
-            
-            # --- DIAGNÓSTICO ---
-            with st.expander("🕵️ Diagnóstico de Cuentas"):
-                 if not df_pnl.empty:
-                     st.dataframe(df_pnl[['ID_Cuenta', 'Nombre_Cuenta']].drop_duplicates().sort_values('ID_Cuenta'), hide_index=True, use_container_width=True)
+                
+                ids_cuentas_analiticas = df_filtered['id_cuenta_analitica'].dropna().unique().tolist()
+                nombres_cuentas_analiticas = df_filtered['Cuenta_Analitica_Nombre'].unique().tolist()
+                
+                # Horas
+                df_horas_detalle = cargar_detalle_horas_estructura(ids_cuentas_analiticas)
+                total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
+                
+                # Inventario
+                df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuentas_analiticas)
+                total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
+                
+                # Compras Pendientes
+                df_compras = cargar_compras_pendientes(ids_cuentas_analiticas)
+                total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
+                
+                txt_bodegas = "Sin ubicación asignada"
+                color_bg = "bg-purple"
+                if status_stock == "OK" or status_stock == "NO_STOCK":
+                    txt_bodegas = f"Encontradas: {', '.join(bodegas_encontradas)}"
+                elif "ERR" in status_stock:
+                    color_bg = "bg-red"
+                elif status_stock == "NO_BODEGA":
+                    color_bg = "bg-gray"
+                
+                # --- FILA 1 ---
+                k1, k2, k3, k4 = st.columns(4)
+                with k1: card_kpi("Ventas", total_ventas, "bg-green")
+                with k2: card_kpi("Instalación", total_instalacion, "bg-blue")
+                with k3: card_kpi("Suministros", total_suministros, "bg-orange")
+                with k4: card_kpi("WIP Acumulado", total_wip, "bg-yellow")
+                
+                # --- FILA 2 ---
+                k5, k6, k7, k8 = st.columns(4)
+                with k5: card_kpi("Provisiones", total_provision, "bg-red")
+                with k6: card_kpi("Ajustes Inv.", total_ajustes, "bg-gray")
+                with k7: card_kpi("Inventario Sitio", total_stock_sitio, color_bg, nota=txt_bodegas)
+                with k8: card_kpi("Compras Pendientes", total_compras_pendientes, "bg-teal")
+                
+                st.divider()
+                
+                c_horas, c_stock = st.columns(2)
+                with c_horas:
+                    st.markdown("##### 🕒 Desglose de Horas (Shadow Cost)")
+                    if not df_horas_detalle.empty:
+                        resumen_horas = df_horas_detalle.groupby(['Tipo_Hora', 'Multiplicador'])[['Horas', 'Costo']].sum().reset_index()
+                        st.dataframe(resumen_horas, column_config={"Costo": st.column_config.NumberColumn(format="₡ %.2f"), "Multiplicador": st.column_config.NumberColumn(format="x %.1f")}, hide_index=True, use_container_width=True)
+                        
+                        with st.expander("🕵️ Auditoría Detallada de Horas"):
+                            df_audit = df_horas_detalle[['date', 'Empleado', 'name', 'Tipo_Hora', 'Horas', 'Costo']].sort_values('date', ascending=False)
+                            st.dataframe(df_audit, use_container_width=True)
+                            st.download_button("📥 Descargar", data=convert_df_to_excel(df_audit), file_name="Auditoria_Horas.xlsx")
+                    else: st.caption("Sin registros.")
+                
+                with c_stock:
+                    st.markdown("##### 📦 Detalle Inventario / Compras")
+                    tab_inv_det, tab_com_det = st.tabs(["Inventario Físico", "Compras Pendientes"])
+                    
+                    with tab_inv_det:
+                        if not df_stock_sitio.empty:
+                            st.dataframe(df_stock_sitio[['pname', 'quantity', 'Valor_Total']], 
+                                         column_config={
+                                             "pname": "Producto",
+                                             "Valor_Total": st.column_config.NumberColumn(format="₡ %.2f")
+                                         }, 
+                                         hide_index=True, use_container_width=True)
+                        else: st.caption(f"Estado: {status_stock}")
+                    
+                    with tab_com_det:
+                        if not df_compras.empty:
+                            st.dataframe(df_compras, column_config={"Monto_Pendiente": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
+                        else: st.caption("Todo facturado.")
+
+                st.divider()
+                st.markdown("**Detalle Movimientos Contables (P&L)**")
+                st.dataframe(
+                    df_filtered[['date', 'name', 'Cuenta_Analitica_Nombre', 'Clasificacion', 'Monto_Neto']].sort_values('date', ascending=False),
+                    column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")},
+                    use_container_width=True, hide_index=True
+                )
+            else: st.warning("Sin datos.")
+    else: st.warning("Sin movimientos analíticos.")
 
 # === PESTAÑA 4: INVENTARIO ===
 with tab_inv:
