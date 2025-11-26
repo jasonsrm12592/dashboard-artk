@@ -18,7 +18,6 @@ hide_st_style = """
             header {visibility: hidden;}
             .block-container {padding-top: 1rem; padding-bottom: 1rem;}
             
-            /* ESTILOS KPI */
             .kpi-card {
                 padding: 15px;
                 border-radius: 10px;
@@ -30,11 +29,11 @@ hide_st_style = """
             .kpi-title { font-size: 0.9rem; font-weight: bold; opacity: 0.9; }
             .kpi-value { font-size: 1.4rem; font-weight: bold; margin-top: 5px; }
             
-            .bg-green { background-color: #27ae60; }   /* Ventas */
-            .bg-orange { background-color: #e67e22; }  /* Mercadería */
-            .bg-yellow { background-color: #f1c40f; color: #333 !important; }  /* WIP */
-            .bg-blue { background-color: #2980b9; }    /* Horas */
-            .bg-purple { background-color: #8e44ad; }  /* Inventario Proyecto */
+            .bg-green { background-color: #27ae60; }
+            .bg-orange { background-color: #e67e22; }
+            .bg-yellow { background-color: #f1c40f; color: #333 !important; }
+            .bg-blue { background-color: #2980b9; }
+            .bg-purple { background-color: #8e44ad; }
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
@@ -47,7 +46,6 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # IDs Contables
     IDS_INGRESOS = [68, 398, 66, 69, 401, 403, 404, 405, 406, 407, 408, 409, 410, 77, 78]
     ID_COSTO_RETAIL = 76
     IDS_COSTO_PROY = [399, 400, 402, 395]
@@ -243,19 +241,12 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
-        # Asegurar que sean INT
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
-
-        dominio = [
-            ['account_id', 'in', ids_clean],
-            ['date', '>=', f'{datetime.now().year}-01-01']
-        ]
+        dominio = [['account_id', 'in', ids_clean], ['date', '>=', f'{datetime.now().year}-01-01']]
         campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
-        
         df = pd.DataFrame(registros)
         if not df.empty:
             def limpiar_tipo(val):
@@ -264,38 +255,67 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
             df['Tipo_Hora'] = df['x_studio_tipo_horas_1'].apply(limpiar_tipo)
             df['Costo'] = df['amount'].abs()
             df['Horas'] = df['unit_amount']
-            
         return df
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=900)
-def cargar_inventario_ubicacion_proyecto(ids_proyectos_analiticos):
+def cargar_inventario_ubicacion_proyecto_v2(ids_cuentas_analiticas, nombres_cuentas_analiticas=None):
     """
-    Busca stock en ubicaciones vinculadas a un proyecto.
-    CORRECCIÓN CRÍTICA:
-    1. Busca la ubicación con el campo Studio (sin importar si es View o Internal).
-    2. Usa 'child_of' para encontrar stock en cualquier sub-ubicación.
-    3. Convierte IDs a enteros para evitar errores XML-RPC.
+    ESTRATEGIA TRIPLE PARA ENCONTRAR LA UBICACIÓN:
+    1. Buscar por ID de Cuenta Analítica (Directo).
+    2. Buscar por ID de Proyecto (Puente: Analytic -> Project).
+    3. Buscar por Nombre (Fuzzy Match "2025-47").
     """
     try:
-        if not ids_proyectos_analiticos: return pd.DataFrame()
+        if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # 1. Limpieza de IDs (Float -> Int)
-        ids_clean = [int(x) for x in ids_proyectos_analiticos if pd.notna(x) and x != 0]
-        if not ids_clean: return pd.DataFrame()
-
-        # 2. Buscar Ubicaciones Padre vinculadas al proyecto
-        # Quitamos 'usage'='internal' para encontrar carpetas padres o vistas
-        dominio_loc = [['x_studio_field_qCgKk', 'in', ids_clean]]
-        ids_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
+        # 1. Obtener IDs limpios
+        ids_clean_analytic = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
+        
+        # 2. Buscar IDs de Proyectos asociados a estas cuentas analíticas
+        ids_projects = []
+        if ids_clean_analytic:
+            try:
+                dom_proj = [['analytic_account_id', 'in', ids_clean_analytic]]
+                ids_projects = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [dom_proj])
+            except: pass
+            
+        # Lista maestra de IDs para buscar en x_studio_field_qCgKk
+        ids_to_search = list(set(ids_clean_analytic + ids_projects))
+        
+        # 3. Construir Dominio de Búsqueda de Ubicación (Triple Check)
+        # Opción A: Por ID (Analitica o Proyecto)
+        dominio_loc = ['|', ['x_studio_field_qCgKk', 'in', ids_to_search]]
+        
+        # Opción B: Por Nombre (Si tenemos nombres)
+        if nombres_cuentas_analiticas:
+            for nombre in nombres_cuentas_analiticas:
+                # Tomamos la primera parte del nombre "2025-47" para ser más efectivos
+                short_name = nombre.split(' ')[0] if nombre else ""
+                if len(short_name) > 3:
+                    dominio_loc = ['|', ['name', 'ilike', short_name]] + dominio_loc
+                    
+        # Cerrar dominio (siempre debe haber un término final si usamos '|', pero aquí concatenamos)
+        # Corrección: La sintaxis polaca de Odoo '|' A B requiere cuidado.
+        # Simplificamos: Buscamos ID primero. Si falla, buscamos Nombre.
+        
+        # BUSQUEDA 1: Por ID
+        ids_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', ids_to_search]]])
+        
+        # BUSQUEDA 2: Por Nombre (Solo si tenemos nombres y Búsqueda 1 falló o para complementar)
+        if nombres_cuentas_analiticas:
+            for nombre in nombres_cuentas_analiticas:
+                short_name = nombre.split(' ')[0]
+                if len(short_name) > 3:
+                    ids_locs_name = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['name', 'ilike', short_name]]])
+                    ids_locs = list(set(ids_locs + ids_locs_name))
         
         if not ids_locs: return pd.DataFrame()
         
-        # 3. Traer Quants (Stock Físico)
-        # Usamos 'child_of' para ver recursivamente todo lo que hay dentro de esas ubicaciones
+        # 4. Traer Quants (Recursivo child_of)
         dominio_quant = [
             ['location_id', 'child_of', ids_locs], 
             ['company_id', '=', COMPANY_ID]
@@ -306,21 +326,14 @@ def cargar_inventario_ubicacion_proyecto(ids_proyectos_analiticos):
         
         df = pd.DataFrame(data_quants)
         if not df.empty:
-            # Agrupar por producto para simplificar
             df = df.groupby('product_id').agg({'quantity': 'sum'}).reset_index()
-            
-            # Limpiar columna product_id que viene como [id, nombre]
             df['pid'] = df['product_id'].apply(lambda x: x[0] if x else 0)
-            
-            # 4. Traer Costos
             ids_prods = df['pid'].unique().tolist()
             costos = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'name']})
             df_costos = pd.DataFrame(costos).rename(columns={'id': 'pid', 'standard_price': 'Costo_Unit', 'name': 'Producto_Nombre'})
-            
             df = pd.merge(df, df_costos, on='pid', how='left')
-            
             df['Valor_Total'] = df['quantity'] * df['Costo_Unit']
-            df = df[df['quantity'] != 0] # Quitar ceros
+            df = df[df['quantity'] != 0]
             
         return df
     except Exception: return pd.DataFrame()
@@ -335,7 +348,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v2.7")
+st.title("🚀 Monitor Comercial ALROTEK v2.8")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -543,23 +556,22 @@ with tab_renta:
             ].copy()
             
             if not df_filtered.empty:
-                # KPIs CONTABLES
                 total_ventas = df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum()
                 total_mercaderia = df_filtered[df_filtered['Clasificacion'] == 'Costo Mercadería']['Monto_Neto'].sum()
                 total_wip = df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum()
                 total_horas_contable = df_filtered[df_filtered['Clasificacion'] == 'Costo Horas']['Monto_Neto'].sum()
                 
-                # DATOS EXTRA (ANALITICA REAL + INVENTARIO)
                 ids_cuentas_analiticas = df_filtered['id_cuenta_analitica'].dropna().unique().tolist()
+                nombres_cuentas_analiticas = df_filtered['Cuenta_Analitica_Nombre'].unique().tolist() # Para búsqueda por nombre
                 
-                # Cargar Desglose Horas Studio
+                # Cargar Extras
                 df_horas_detalle = cargar_detalle_horas_estructura(ids_cuentas_analiticas)
                 
-                # Cargar Inventario en Sitio
-                df_stock_sitio = cargar_inventario_ubicacion_proyecto(ids_cuentas_analiticas)
+                # --- AQUÍ LLAMAMOS A LA NUEVA FUNCIÓN V2 (TRIPLE CHECK) ---
+                df_stock_sitio = cargar_inventario_ubicacion_proyecto_v2(ids_cuentas_analiticas, nombres_cuentas_analiticas)
+                
                 total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
                 
-                # --- TARJETAS ---
                 k1, k2, k3, k4, k5 = st.columns(5)
                 with k1: card_kpi("Ventas", total_ventas, "bg-green")
                 with k2: card_kpi("Costo Mercadería", total_mercaderia, "bg-orange")
@@ -567,9 +579,6 @@ with tab_renta:
                 with k4: card_kpi("Costo Horas (Contable)", total_horas_contable, "bg-blue")
                 with k5: card_kpi("Inventario Sitio", total_stock_sitio, "bg-purple")
                 
-                # --- SECCIONES DETALLE ---
-                
-                # 1. Desglose Horas
                 c_horas, c_stock = st.columns(2)
                 with c_horas:
                     st.markdown("##### 🕒 Desglose de Horas (Normal / Extra)")
@@ -578,7 +587,6 @@ with tab_renta:
                         st.dataframe(resumen_horas, column_config={"Costo": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
                     else: st.caption("Sin registros de horas analíticas.")
                 
-                # 2. Desglose Inventario
                 with c_stock:
                     st.markdown("##### 📦 Inventario en Ubicación del Proyecto")
                     if not df_stock_sitio.empty:
@@ -587,7 +595,6 @@ with tab_renta:
                                      hide_index=True, use_container_width=True)
                     else: st.caption("Sin stock asignado a ubicación de proyecto.")
 
-                # 3. Tabla General Contable
                 st.divider()
                 st.markdown("**Detalle Movimientos Contables**")
                 st.dataframe(
