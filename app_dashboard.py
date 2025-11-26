@@ -308,4 +308,23 @@ with tab_cli:
             if lista_perdidos:
                 df_lost = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]
                 top_lost = df_lost.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10)
-                st.dataframe(top_lost.to_frame("Compró Año Pasado").style.
+                st.dataframe(top_lost.to_frame("Compró Año Pasado").style.format("₡ {:,.0f}"), use_container_width=True)
+            else:
+                st.success("Retención del 100%.")
+
+        st.subheader("🌱 Top Clientes Nuevos")
+        if lista_nuevos:
+            df_new = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]
+            top_new = df_new.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10)
+            st.dataframe(top_new.to_frame("Venta Acumulada").style.format("₡ {:,.0f}"), use_container_width=True)
+        
+        st.divider()
+        
+        st.subheader("🔎 Matriz de Valor")
+        scatter_data = df_c_anio.groupby('Cliente').agg({'Venta_Neta': 'sum', 'name': 'nunique'}).reset_index()
+        scatter_data.columns = ['Cliente', 'Monto', 'Frecuencia']
+        scatter_data['Size'] = scatter_data['Monto'].abs().replace(0, 1)
+        
+        fig_s = px.scatter(scatter_data, x='Frecuencia', y='Monto', size='Size', 
+                           color='Monto', hover_name='Cliente', color_continuous_scale='RdBu')
+        st.plotly_chart(fig_s, use_container_width=True)
