@@ -4,6 +4,7 @@ import xmlrpc.client
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
+import io
 import os
 
 # --- 1. CONFIGURACIÓN ---
@@ -30,7 +31,16 @@ except Exception:
     st.error("❌ Error: No encuentro el archivo .streamlit/secrets.toml")
     st.stop()
 
-# --- 3. FUNCIONES DE CARGA ---
+# --- 3. FUNCIONES UTILITARIAS ---
+
+def convert_df_to_excel(df):
+    """Convierte un DataFrame a un archivo Excel en memoria"""
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Datos')
+    return output.getvalue()
+
+# --- 4. FUNCIONES DE CARGA ---
 
 @st.cache_data(ttl=900) 
 def cargar_datos_generales():
@@ -71,7 +81,7 @@ def cargar_datos_generales():
 
 @st.cache_data(ttl=3600) 
 def cargar_detalle_productos():
-    """Descarga LÍNEAS DE FACTURA (Ventas)"""
+    """Descarga LÍNEAS DE FACTURA (Ventas Detalle)"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -85,7 +95,7 @@ def cargar_detalle_productos():
             ['display_type', '=', 'product'],
             ['move_id.move_type', 'in', ['out_invoice', 'out_refund']]
         ]
-        campos = ['date', 'product_id', 'credit', 'debit', 'quantity', 'name']
+        campos = ['date', 'product_id', 'credit', 'debit', 'quantity', 'name', 'price_unit']
         
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': campos})
@@ -118,7 +128,7 @@ def cargar_inventario():
             ids_templates_kit = []
 
         dominio = [['active', '=', True]]
-        campos = ['name', 'qty_available', 'list_price', 'standard_price', 'detailed_type', 'create_date', 'product_tmpl_id']
+        campos = ['name', 'qty_available', 'list_price', 'standard_price', 'detailed_type', 'create_date', 'product_tmpl_id', 'default_code']
         
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': campos})
@@ -128,7 +138,7 @@ def cargar_inventario():
             df['create_date'] = pd.to_datetime(df['create_date'])
             df['Valor_Inventario'] = df['qty_available'] * df['standard_price']
             
-            df.rename(columns={'id': 'ID_Producto', 'name': 'Producto', 'qty_available': 'Stock', 'standard_price': 'Costo'}, inplace=True)
+            df.rename(columns={'id': 'ID_Producto', 'name': 'Producto', 'qty_available': 'Stock', 'standard_price': 'Costo', 'default_code': 'Referencia'}, inplace=True)
             
             df['ID_Template'] = df['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
             if ids_templates_kit:
@@ -149,7 +159,7 @@ def cargar_metas():
         return df
     return pd.DataFrame({'Mes': [], 'Meta': []})
 
-# --- 4. INTERFAZ ---
+# --- 5. INTERFAZ ---
 st.title("🚀 Monitor Comercial ALROTEK")
 
 tab_kpis, tab_prod, tab_inv, tab_cli = st.tabs(["📊 Visión General", "📦 Ventas por Producto", "🧟 Control Inventario", "👥 Inteligencia Clientes"])
@@ -168,15 +178,12 @@ with tab_kpis:
         
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
         
-        # KPIs Venta
+        # KPIs
         venta = df_anio['Venta_Neta'].sum()
         meta = df_metas[df_metas['Mes'].dt.year == anio_sel]['Meta'].sum()
-        
-        # KPI Ticket
         cant_facturas = df_anio['name'].nunique()
         ticket_promedio = (venta / cant_facturas) if cant_facturas > 0 else 0
         
-        # 4 COLUMNAS (Limpiamos Clientes Perdidos de aquí)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Venta Total", f"₡ {venta/1e6:,.1f} M")
         c2.metric("Meta Anual", f"₡ {meta/1e6:,.1f} M")
@@ -185,6 +192,12 @@ with tab_kpis:
 
         st.divider()
         
+        # Botón de Descarga General
+        col_down, _ = st.columns([1, 4])
+        with col_down:
+            excel_data = convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Vendedor', 'Venta_Neta']])
+            st.download_button("📥 Descargar Detalle Facturas", data=excel_data, file_name=f"Ventas_{anio_sel}.xlsx", mime="application/vnd.ms-excel")
+
         c_graf, c_vend = st.columns([2, 1])
         with c_graf:
             v_mes = df_anio.groupby('Mes')['Venta_Neta'].sum().reset_index()
@@ -211,19 +224,26 @@ with tab_prod:
         anio_p_sel = st.selectbox("Año de Análisis", anios_p, key="prod_anio")
         
         df_p_anio = df_prod[df_prod['date'].dt.year == anio_p_sel].copy()
-        df_p_anio = pd.merge(df_p_anio, df_cat[['ID_Producto', 'Tipo']], on='ID_Producto', how='left')
+        df_p_anio = pd.merge(df_p_anio, df_cat[['ID_Producto', 'Tipo', 'Referencia']], on='ID_Producto', how='left')
         df_p_anio['Tipo'] = df_p_anio['Tipo'].fillna('Desconocido')
 
-        # Filtro: Solo Almacenable y Servicio
         df_p_anio = df_p_anio[df_p_anio['Tipo'].isin(['Almacenable', 'Servicio'])]
 
+        # Botón de Descarga Productos
+        st.markdown("### Detalle de Ventas por Producto")
+        col_down_p, _ = st.columns([1, 4])
+        with col_down_p:
+            # Preparamos Excel con detalle total
+            df_export_prod = df_p_anio.groupby(['Referencia', 'Producto', 'Tipo'])[['quantity', 'Venta_Neta']].sum().reset_index()
+            excel_prod = convert_df_to_excel(df_export_prod)
+            st.download_button("📥 Descargar Todo el Listado de Productos", data=excel_prod, file_name=f"Productos_Vendidos_{anio_p_sel}.xlsx")
+
         col_tipo1, col_tipo2 = st.columns([1, 2])
-        
         with col_tipo1:
             ventas_por_tipo = df_p_anio.groupby('Tipo')['Venta_Neta'].sum().reset_index()
             fig_pie = px.pie(ventas_por_tipo, values='Venta_Neta', names='Tipo', hole=0.4, 
                              color_discrete_sequence=px.colors.qualitative.Set2)
-            fig_pie.update_layout(height=350, title_text="Mix de Venta (Sin Consumibles)")
+            fig_pie.update_layout(height=350, title_text="Mix de Venta")
             st.plotly_chart(fig_pie, use_container_width=True)
             
         with col_tipo2:
@@ -238,14 +258,13 @@ with tab_prod:
             fig_bar.update_layout(height=350, xaxis_title="Monto", yaxis_title="")
             st.plotly_chart(fig_bar, use_container_width=True)
 
-# === PESTAÑA 3: INVENTARIO (HUESOS) ===
+# === PESTAÑA 3: INVENTARIO ===
 with tab_inv:
     if not df_cat.empty:
         st.subheader("⚠️ Detección de Baja Rotación (Productos Hueso)")
         
         anio_hueso = anio_p_sel if 'anio_p_sel' in locals() else datetime.now().year
-        st.info(f"Analizando productos almacenables con STOCK > 0 que NO se han vendido en {anio_hueso}.")
-
+        
         df_stock_real = df_cat[df_cat['Stock'] > 0].copy()
         ids_vendidos = set(df_prod[df_prod['date'].dt.year == anio_hueso]['ID_Producto'].unique())
         
@@ -256,11 +275,17 @@ with tab_inv:
         df_zombies = df_zombies.sort_values('Valor_Inventario', ascending=False)
         total_atrapado = df_zombies['Valor_Inventario'].sum()
         
+        # Botón de Descarga Huesos
+        col_down_z, _ = st.columns([1, 4])
+        with col_down_z:
+            excel_huesos = convert_df_to_excel(df_zombies[['Referencia', 'Producto', 'create_date', 'Stock', 'Costo', 'Valor_Inventario']])
+            st.download_button("📥 Descargar Lista Completa de Huesos", data=excel_huesos, file_name=f"Productos_Hueso_{anio_hueso}.xlsx")
+
         m1, m2 = st.columns(2)
-        m1.metric("Capital Inmovilizado (Costo)", f"₡ {total_atrapado/1e6:,.1f} M", help="Stock x Costo")
+        m1.metric("Capital Inmovilizado", f"₡ {total_atrapado/1e6:,.1f} M")
         m2.metric("Items Sin Rotación", len(df_zombies))
         
-        st.write(f"Top 50 Productos estancados (Ordenado por Valor):")
+        st.write(f"Top 50 Productos estancados:")
         st.dataframe(
             df_zombies[['Producto', 'create_date', 'Stock', 'Costo', 'Valor_Inventario']].head(50)
             .style.format({'Costo': '₡ {:,.0f}', 'Valor_Inventario': '₡ {:,.0f}', 'create_date': '{:%Y-%m-%d}'}),
@@ -296,6 +321,14 @@ with tab_cli:
         
         st.divider()
         
+        # Botón Descarga Clientes
+        col_down_cli, _ = st.columns([1, 4])
+        with col_down_cli:
+            # Exportar lista con venta total por cliente
+            df_export_cli = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().reset_index().sort_values('Venta_Neta', ascending=False)
+            excel_cli = convert_df_to_excel(df_export_cli)
+            st.download_button("📥 Descargar Reporte de Clientes", data=excel_cli, file_name=f"Clientes_{anio_c_sel}.xlsx")
+
         c_top, c_analisis = st.columns([1, 1])
         
         with c_top:
