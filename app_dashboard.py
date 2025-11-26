@@ -6,7 +6,7 @@ import plotly.express as px
 from datetime import datetime
 import io
 import os
-import ast  # Librería necesaria para leer la analítica de forma segura
+import ast
 
 # --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="Alrotek Sales Monitor", layout="wide")
@@ -17,6 +17,24 @@ hide_st_style = """
             footer {visibility: hidden;}
             header {visibility: hidden;}
             .block-container {padding-top: 1rem; padding-bottom: 1rem;}
+            
+            /* ESTILOS KPI */
+            .kpi-card {
+                padding: 15px;
+                border-radius: 10px;
+                color: white;
+                text-align: center;
+                margin-bottom: 10px;
+                box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+            }
+            .kpi-title { font-size: 0.9rem; font-weight: bold; opacity: 0.9; }
+            .kpi-value { font-size: 1.4rem; font-weight: bold; margin-top: 5px; }
+            
+            .bg-green { background-color: #27ae60; }   /* Ventas */
+            .bg-orange { background-color: #e67e22; }  /* Mercadería */
+            .bg-yellow { background-color: #f1c40f; color: #333 !important; }  /* WIP */
+            .bg-blue { background-color: #2980b9; }    /* Horas */
+            .bg-purple { background-color: #8e44ad; }  /* Inventario Proyecto */
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
@@ -47,27 +65,27 @@ def convert_df_to_excel(df):
         df.to_excel(writer, index=False, sheet_name='Datos')
     return output.getvalue()
 
+def card_kpi(titulo, valor, color_class):
+    st.markdown(f"""
+    <div class="kpi-card {color_class}">
+        <div class="kpi-title">{titulo}</div>
+        <div class="kpi-value">₡ {valor:,.0f}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
 # --- 4. FUNCIONES DE CARGA ---
 
 @st.cache_data(ttl=900) 
 def cargar_datos_generales():
-    """Descarga FACTURAS DE VENTA"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         if not uid: return None
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
-        dominio = [
-            ['move_type', 'in', ['out_invoice', 'out_refund']],
-            ['state', '=', 'posted'],
-            ['invoice_date', '>=', '2021-01-01'],
-            ['company_id', '=', COMPANY_ID]
-        ]
+        dominio = [['move_type', 'in', ['out_invoice', 'out_refund']], ['state', '=', 'posted'], ['invoice_date', '>=', '2021-01-01'], ['company_id', '=', COMPANY_ID]]
         campos = ['name', 'invoice_date', 'amount_untaxed_signed', 'partner_id', 'invoice_user_id']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'read', [ids], {'fields': campos})
-        
         df = pd.DataFrame(registros)
         if not df.empty:
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
@@ -79,50 +97,6 @@ def cargar_datos_generales():
             df['Venta_Neta'] = df['amount_untaxed_signed']
             df = df[~df['name'].str.contains("WT-", case=False, na=False)]
         return df
-    except Exception as e: return pd.DataFrame()
-
-@st.cache_data(ttl=900)
-def cargar_cartera():
-    """Descarga CUENTAS POR COBRAR (Cartera)"""
-    try:
-        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
-        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
-        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
-        dominio = [
-            ['move_type', '=', 'out_invoice'],
-            ['state', '=', 'posted'],
-            ['payment_state', 'in', ['not_paid', 'partial']],
-            ['amount_residual', '>', 0],
-            ['company_id', '=', COMPANY_ID]
-        ]
-        
-        campos = ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'partner_id', 'invoice_user_id']
-        ids = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'read', [ids], {'fields': campos})
-        
-        df = pd.DataFrame(registros)
-        if not df.empty:
-            df['invoice_date'] = pd.to_datetime(df['invoice_date'])
-            df['invoice_date_due'] = pd.to_datetime(df['invoice_date_due'])
-            df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
-            df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
-            
-            hoy = pd.Timestamp.now()
-            df['Dias_Vencido'] = (hoy - df['invoice_date_due']).dt.days
-            
-            def bucket_cartera(dias):
-                if dias < 0: return "Por Vencer"
-                if dias <= 30: return "0-30 Días"
-                if dias <= 60: return "31-60 Días"
-                if dias <= 90: return "61-90 Días"
-                return "+90 Días"
-            
-            df['Antiguedad'] = df['Dias_Vencido'].apply(bucket_cartera)
-            orden_buckets = ["Por Vencer", "0-30 Días", "31-60 Días", "61-90 Días", "+90 Días"]
-            df['Antiguedad'] = pd.Categorical(df['Antiguedad'], categories=orden_buckets, ordered=True)
-            
-        return df
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -132,8 +106,7 @@ def cargar_datos_clientes_extendido(ids_clientes):
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        campos = ['state_id', 'x_studio_zona', 'x_studio_categoria_cliente']
-        registros = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'read', [list(ids_clientes)], {'fields': campos})
+        registros = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'read', [list(ids_clientes)], {'fields': ['state_id', 'x_studio_zona', 'x_studio_categoria_cliente']})
         df = pd.DataFrame(registros)
         if not df.empty:
             df['Provincia'] = df['state_id'].apply(lambda x: x[1] if x else "Sin Provincia")
@@ -150,24 +123,14 @@ def cargar_datos_clientes_extendido(ids_clientes):
 
 @st.cache_data(ttl=3600) 
 def cargar_detalle_productos():
-    """Descarga LÍNEAS DE FACTURA + ANALÍTICA"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
         anio_inicio = datetime.now().year - 1
-        dominio = [
-            ['parent_state', '=', 'posted'],
-            ['date', '>=', f'{anio_inicio}-01-01'], 
-            ['company_id', '=', COMPANY_ID],
-            ['display_type', '=', 'product'],
-            ['move_id.move_type', 'in', ['out_invoice', 'out_refund']]
-        ]
-        campos = ['date', 'product_id', 'credit', 'debit', 'quantity', 'name', 'move_id', 'analytic_distribution']
+        dominio = [['parent_state', '=', 'posted'], ['date', '>=', f'{anio_inicio}-01-01'], ['company_id', '=', COMPANY_ID], ['display_type', '=', 'product'], ['move_id.move_type', 'in', ['out_invoice', 'out_refund']]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': campos})
-        
+        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'product_id', 'credit', 'debit', 'quantity', 'name', 'move_id', 'analytic_distribution']})
         df = pd.DataFrame(registros)
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'])
@@ -179,27 +142,24 @@ def cargar_detalle_productos():
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
-def cargar_inventario():
+def cargar_inventario_general():
+    """Inventario global para pestaña 4"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        try:
-            ids_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
-            kits_data = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'read', [ids_kits], {'fields': ['product_tmpl_id']})
-            ids_templates_kit = [k['product_tmpl_id'][0] for k in kits_data if k['product_tmpl_id']]
-        except: ids_templates_kit = []
+        try: ids_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
+        except: ids_kits = []
+        ids_templates_kit = [] # Simplificado para no alargar, lógica de kits opcional aquí
+        
         dominio = [['active', '=', True]]
-        campos = ['name', 'qty_available', 'list_price', 'standard_price', 'detailed_type', 'create_date', 'product_tmpl_id', 'default_code']
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': campos})
+        registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'create_date', 'default_code']})
         df = pd.DataFrame(registros)
         if not df.empty:
             df['create_date'] = pd.to_datetime(df['create_date'])
             df['Valor_Inventario'] = df['qty_available'] * df['standard_price']
             df.rename(columns={'id': 'ID_Producto', 'name': 'Producto', 'qty_available': 'Stock', 'standard_price': 'Costo', 'default_code': 'Referencia'}, inplace=True)
-            df['ID_Template'] = df['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
-            if ids_templates_kit: df = df[~df['ID_Template'].isin(ids_templates_kit)]
             tipo_map = {'product': 'Almacenable', 'service': 'Servicio', 'consu': 'Consumible'}
             df['Tipo'] = df['detailed_type'].map(tipo_map).fillna('Otro')
         return df
@@ -207,29 +167,22 @@ def cargar_inventario():
 
 @st.cache_data(ttl=3600)
 def cargar_estructura_analitica():
-    """Descarga RELACIÓN: CUENTA ANALÍTICA -> PLAN ANALÍTICO (CORREGIDA)"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
-        # 1. Traemos los PLANES
         ids_plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'search', [[['id', '!=', 0]]])
         plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'read', [ids_plans], {'fields': ['name']})
         df_plans = pd.DataFrame(plans).rename(columns={'id': 'plan_id', 'name': 'Plan_Nombre'})
-        
-        # 2. Traemos las CUENTAS y su respectivo PLAN_ID
         ids_acc = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'search', [[['active', 'in', [True, False]]]])
         accounts = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'read', [ids_acc], {'fields': ['name', 'plan_id']})
         df_acc = pd.DataFrame(accounts)
-        
         if not df_acc.empty and not df_plans.empty:
             df_acc['plan_id'] = df_acc['plan_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else (x if x else 0))
             df_full = pd.merge(df_acc, df_plans, on='plan_id', how='left')
             df_full.rename(columns={'id': 'id_cuenta_analitica', 'name': 'Cuenta_Nombre'}, inplace=True)
             df_full['Plan_Nombre'] = df_full['Plan_Nombre'].fillna("Sin Plan Asignado")
             return df_full[['id_cuenta_analitica', 'Cuenta_Nombre', 'Plan_Nombre']]
-            
         return pd.DataFrame()
     except Exception: return pd.DataFrame()
 
@@ -239,10 +192,9 @@ def cargar_pnl_contable(anio):
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        dominio_pnl = [['account_id', 'in', TODOS_LOS_IDS], ['date', '>=', f'{anio}-01-01'], ['date', '<=', f'{anio}-12-31'], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted']]
-        campos = ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']
+        dominio_pnl = [['account_id', 'in', TODOS_LOS_IDS], ['date', '>=', f'{anio}-01-01'], ['date', '<=', f'{anio}-12-31'], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': campos})
+        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
         df = pd.DataFrame(registros)
         if not df.empty:
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
@@ -250,8 +202,8 @@ def cargar_pnl_contable(anio):
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
-                if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
-                if id_acc in IDS_COSTO_PROY: return "Costo Proyecto"
+                if id_acc == ID_COSTO_RETAIL: return "Costo Mercadería"
+                if id_acc in IDS_COSTO_PROY: return "Costo Horas"
                 if id_acc == ID_WIP: return "WIP"
                 return "Otro"
             df['Clasificacion'] = df.apply(clasificar, axis=1)
@@ -265,22 +217,111 @@ def cargar_pnl_contable(anio):
         return df
     except Exception: return pd.DataFrame()
 
-def cargar_metas():
-    if os.path.exists("metas.xlsx"):
-        df = pd.read_excel("metas.xlsx")
-        df['Mes'] = pd.to_datetime(df['Mes'])
-        df['Mes_Num'] = df['Mes'].dt.month
-        df['Anio'] = df['Mes'].dt.year
+@st.cache_data(ttl=900)
+def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
+    """Descarga detalle de horas desde account.analytic.line usando el campo STUDIO"""
+    try:
+        if not ids_cuentas_analiticas: return pd.DataFrame()
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
+        # Buscamos en lineas analiticas que coincidan con las cuentas seleccionadas
+        dominio = [
+            ['account_id', 'in', ids_cuentas_analiticas],
+            ['date', '>=', f'{datetime.now().year}-01-01'] # Limitamos al año actual para rapidez
+        ]
+        
+        # Campos: Importante 'x_studio_tipo_horas_1'
+        campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name']
+        ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
+        registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
+        
+        df = pd.DataFrame(registros)
+        if not df.empty:
+            # Limpieza del campo studio
+            def limpiar_tipo(val):
+                if not val: return "No Definido"
+                return str(val)
+            df['Tipo_Hora'] = df['x_studio_tipo_horas_1'].apply(limpiar_tipo)
+            # El costo en analytic line suele ser negativo, lo volvemos positivo para mostrar "Gasto"
+            df['Costo'] = df['amount'].abs()
+            df['Horas'] = df['unit_amount']
+            
         return df
-    return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
+    except Exception: return pd.DataFrame()
+
+@st.cache_data(ttl=900)
+def cargar_inventario_ubicacion_proyecto(ids_proyectos_analiticos):
+    """
+    Busca stock en ubicaciones vinculadas a un proyecto.
+    Asume que 'x_studio_field_qCgKk' en stock.location guarda el ID del Proyecto/Cuenta Analítica.
+    """
+    try:
+        if not ids_proyectos_analiticos: return pd.DataFrame()
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
+        # 1. Buscar Ubicaciones que tengan estos IDs de proyecto en el campo Studio
+        # Nota: ids_proyectos_analiticos son enteros (IDs de cuenta analitica). 
+        # Odoo Studio a veces guarda Relaciones como ID entero o String. Probamos ID.
+        dominio_loc = [['x_studio_field_qCgKk', 'in', ids_proyectos_analiticos], ['usage', '=', 'internal']]
+        ids_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
+        
+        if not ids_locs: return pd.DataFrame()
+        
+        # 2. Traer Quants de esas ubicaciones
+        dominio_quant = [['location_id', 'in', ids_locs]]
+        campos_quant = ['product_id', 'quantity', 'location_id']
+        ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
+        data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': campos_quant})
+        
+        df = pd.DataFrame(data_quants)
+        if not df.empty:
+            # 3. Traer Costos de esos productos
+            ids_prods = [p[0] for p in df['product_id'] if p]
+            ids_prods = list(set(ids_prods))
+            costos = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'name']})
+            df_costos = pd.DataFrame(costos).rename(columns={'id': 'pid', 'standard_price': 'Costo_Unit', 'name': 'Producto_Nombre'})
+            
+            df['pid'] = df['product_id'].apply(lambda x: x[0] if x else 0)
+            df = pd.merge(df, df_costos, on='pid', how='left')
+            
+            df['Valor_Total'] = df['quantity'] * df['Costo_Unit']
+            df = df[df['quantity'] != 0] # Quitar ceros
+            
+        return df
+    except Exception: return pd.DataFrame()
+
+def cargar_cartera():
+    try:
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        dominio = [['move_type', '=', 'out_invoice'], ['state', '=', 'posted'], ['payment_state', 'in', ['not_paid', 'partial']], ['amount_residual', '>', 0], ['company_id', '=', COMPANY_ID]]
+        ids = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'search', [dominio])
+        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'read', [ids], {'fields': ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'partner_id', 'invoice_user_id']})
+        df = pd.DataFrame(registros)
+        if not df.empty:
+            df['invoice_date'] = pd.to_datetime(df['invoice_date'])
+            df['invoice_date_due'] = pd.to_datetime(df['invoice_date_due'])
+            df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
+            df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
+            df['Dias_Vencido'] = (pd.Timestamp.now() - df['invoice_date_due']).dt.days
+            def bucket(d): return "Por Vencer" if d < 0 else ("0-30" if d<=30 else ("31-60" if d<=60 else ("61-90" if d<=90 else "+90")))
+            df['Antiguedad'] = df['Dias_Vencido'].apply(bucket)
+            df['Antiguedad'] = pd.Categorical(df['Antiguedad'], ["Por Vencer", "0-30", "31-60", "61-90", "+90"], ordered=True)
+        return df
+    except: return pd.DataFrame()
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v2.3")
+st.title("🚀 Monitor Comercial ALROTEK v2.5")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
     "📦 Productos", 
-    "📈 Rentabilidad (Audit)", 
+    "📈 Control Proyectos", 
     "🧟 Inventario", 
     "💰 Cartera",
     "👥 Segmentación",
@@ -291,7 +332,7 @@ tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.
 with st.spinner('Sincronizando todo...'):
     df_main = cargar_datos_generales()
     df_prod = cargar_detalle_productos()
-    df_cat = cargar_inventario()
+    df_cat = cargar_inventario_general()
     df_metas = cargar_metas()
     df_analitica = cargar_estructura_analitica()
     
@@ -310,43 +351,33 @@ with tab_kpis:
         anios = sorted(df_main['invoice_date'].dt.year.unique(), reverse=True)
         anio_sel = st.selectbox("Año Fiscal (Principal)", anios, key="kpi_anio")
         anio_ant = anio_sel - 1
-        
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
         df_ant_data = df_main[df_main['invoice_date'].dt.year == anio_ant]
-        
         venta = df_anio['Venta_Neta'].sum()
         venta_ant_total = df_ant_data['Venta_Neta'].sum()
         delta_anual = ((venta - venta_ant_total) / venta_ant_total * 100) if venta_ant_total > 0 else 0
-        
         metas_filtradas = df_metas[df_metas['Anio'] == anio_sel]
         meta = metas_filtradas['Meta'].sum()
-        
         cant_facturas = df_anio['name'].nunique()
         ticket_promedio = (venta / cant_facturas) if cant_facturas > 0 else 0
-        
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Venta Total", f"₡ {venta/1e6:,.1f} M", f"{delta_anual:.1f}% vs {anio_ant}")
         c2.metric("Meta Anual", f"₡ {meta/1e6:,.1f} M")
         c3.metric("Cumplimiento", f"{(venta/meta*100) if meta>0 else 0:.1f}%")
         c4.metric("Ticket Promedio", f"₡ {ticket_promedio:,.0f}", f"{cant_facturas} Ops")
-
         st.divider()
-        
         col_down, _ = st.columns([1, 4])
         with col_down:
             excel_data = convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Provincia', 'Vendedor', 'Venta_Neta']])
             st.download_button("📥 Descargar Detalle Facturas", data=excel_data, file_name=f"Ventas_{anio_sel}.xlsx")
-
         c_graf, c_vend = st.columns([2, 1])
         with c_graf:
             st.subheader("📊 Ventas por Plan Analítico")
             if not df_prod.empty:
                 df_lineas = df_prod[df_prod['date'].dt.year == anio_sel].copy()
-                
                 mapa_planes = {}
                 if not df_analitica.empty:
                     mapa_planes = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre']))
-                
                 def clasificar_plan_estricto(dist):
                     if not dist: return "Sin Analítica (Retail)"
                     try:
@@ -357,85 +388,54 @@ with tab_kpis:
                             if plan: return plan
                     except: pass
                     return "Analítica Desconocida"
-
                 df_lineas['Plan_Agrupado'] = df_lineas['analytic_distribution'].apply(clasificar_plan_estricto)
-                
                 ventas_linea = df_lineas.groupby('Plan_Agrupado')['Venta_Neta'].sum().reset_index()
-                fig_pie = px.pie(ventas_linea, values='Venta_Neta', names='Plan_Agrupado', hole=0.4, 
-                                 color_discrete_sequence=px.colors.qualitative.Prism)
+                fig_pie = px.pie(ventas_linea, values='Venta_Neta', names='Plan_Agrupado', hole=0.4, color_discrete_sequence=px.colors.qualitative.Prism)
                 fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=300)
                 st.plotly_chart(fig_pie, use_container_width=True)
-                
                 st.subheader("📅 Evolución Mensual por Plan")
                 df_lineas['Mes_Nombre'] = df_lineas['date'].dt.strftime('%m-%b')
                 df_lineas['Mes_Num'] = df_lineas['date'].dt.month
-                
-                ventas_mes_plan = df_lineas.groupby(['Mes_Num', 'Mes_Nombre', 'Plan_Agrupado'])['Venta_Neta'].sum().reset_index()
-                ventas_mes_plan = ventas_mes_plan.sort_values('Mes_Num')
-                
+                ventas_mes_plan = df_lineas.groupby(['Mes_Num', 'Mes_Nombre', 'Plan_Agrupado'])['Venta_Neta'].sum().reset_index().sort_values('Mes_Num')
                 total_por_mes = df_lineas.groupby(['Mes_Num', 'Mes_Nombre'])['Venta_Neta'].sum().reset_index().sort_values('Mes_Num')
                 total_por_mes['Label'] = total_por_mes['Venta_Neta'].apply(lambda x: f"₡{x/1e6:.1f}M")
-                
-                fig_stack = px.bar(ventas_mes_plan, x='Mes_Nombre', y='Venta_Neta', color='Plan_Agrupado',
-                                   title="Mix de Ventas Mensual",
-                                   color_discrete_sequence=px.colors.qualitative.Prism)
-                
-                fig_stack.add_trace(go.Scatter(
-                    x=total_por_mes['Mes_Nombre'], 
-                    y=total_por_mes['Venta_Neta'],
-                    text=total_por_mes['Label'],
-                    mode='text',
-                    textposition='top center',
-                    textfont=dict(size=11, color='black'),
-                    showlegend=False
-                ))
-                
+                fig_stack = px.bar(ventas_mes_plan, x='Mes_Nombre', y='Venta_Neta', color='Plan_Agrupado', title="Mix de Ventas Mensual", color_discrete_sequence=px.colors.qualitative.Prism)
+                fig_stack.add_trace(go.Scatter(x=total_por_mes['Mes_Nombre'], y=total_por_mes['Venta_Neta'], text=total_por_mes['Label'], mode='text', textposition='top center', textfont=dict(size=11, color='black'), showlegend=False))
                 fig_stack.update_layout(height=450, barmode='stack', xaxis_title="", yaxis_title="Venta Total")
                 st.plotly_chart(fig_stack, use_container_width=True)
-                
-            else:
-                st.info("Sin datos de productos.")
-
+            else: st.info("Sin datos de productos.")
             st.divider()
-
             v_mes_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
             v_mes_act.columns = ['Mes_Num', 'Venta_Actual']
             v_mes_ant = df_ant_data.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
             v_mes_ant.columns = ['Mes_Num', 'Venta_Anterior']
             v_metas = metas_filtradas.groupby('Mes_Num')['Meta'].sum().reset_index()
-            
             df_chart = pd.DataFrame({'Mes_Num': range(1, 13)})
             df_chart = pd.merge(df_chart, v_mes_ant, on='Mes_Num', how='left').fillna(0)
             df_chart = pd.merge(df_chart, v_mes_act, on='Mes_Num', how='left').fillna(0)
             df_chart = pd.merge(df_chart, v_metas, on='Mes_Num', how='left').fillna(0)
             nombres_meses = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
             df_chart['Mes_Nombre'] = df_chart['Mes_Num'].map(nombres_meses)
-
             def get_color(real, meta):
                 if meta == 0: return '#2980b9'
                 if real > meta: return '#27ae60'
                 if real < meta: return '#c0392b'
                 return '#f1c40f'
-            
             colores_meta = [get_color(r, m) for r, m in zip(df_chart['Venta_Actual'], df_chart['Meta'])]
-
             st.subheader(f"🎯 Comparativo vs Meta ({anio_sel})")
             fig1 = go.Figure()
             fig1.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'], name='Venta Real', marker_color=colores_meta))
             fig1.add_trace(go.Scatter(x=df_chart['Mes_Nombre'], y=df_chart['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
             fig1.update_layout(template="plotly_white", height=350, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig1, use_container_width=True)
-            
         with c_vend:
             st.subheader("🏆 Top Vendedores")
             rank_actual = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index()
             rank_actual.columns = ['Vendedor', 'Venta_Actual']
             rank_anterior = df_ant_data.groupby('Vendedor')['Venta_Neta'].sum().reset_index()
             rank_anterior.columns = ['Vendedor', 'Venta_Anterior']
-            
             rank_final = pd.merge(rank_actual, rank_anterior, on='Vendedor', how='left').fillna(0)
             rank_final = rank_final.sort_values('Venta_Actual', ascending=True).tail(10)
-            
             def crear_texto(row):
                 monto = f"₡{row['Venta_Actual']/1e6:.1f}M"
                 ant = row['Venta_Anterior']
@@ -446,7 +446,6 @@ with tab_kpis:
                     return f"{monto} {icono} {delta:.0f}%"
                 elif act > 0: return f"{monto} ✨ New"
                 return monto
-
             rank_final['Texto'] = rank_final.apply(crear_texto, axis=1)
             fig_v = go.Figure(go.Bar(x=rank_final['Venta_Actual'], y=rank_final['Vendedor'], orientation='h', text=rank_final['Texto'], textposition='auto', marker_color='#2980b9'))
             fig_v.update_layout(height=600, margin=dict(l=10, r=10, t=30, b=10))
@@ -457,25 +456,21 @@ with tab_prod:
     if not df_prod.empty and not df_cat.empty:
         anios_p = sorted(df_prod['date'].dt.year.unique(), reverse=True)
         anio_p_sel = st.selectbox("Año de Análisis", anios_p, key="prod_anio")
-        
         df_p_anio = df_prod[df_prod['date'].dt.year == anio_p_sel].copy()
         df_p_anio = pd.merge(df_p_anio, df_cat[['ID_Producto', 'Tipo', 'Referencia']], on='ID_Producto', how='left')
         df_p_anio['Tipo'] = df_p_anio['Tipo'].fillna('Desconocido')
         df_p_anio = df_p_anio[df_p_anio['Tipo'].isin(['Almacenable', 'Servicio'])]
-
         col_down_p, _ = st.columns([1, 4])
         with col_down_p:
             df_export_prod = df_p_anio.groupby(['Referencia', 'Producto', 'Tipo'])[['quantity', 'Venta_Neta']].sum().reset_index()
             excel_prod = convert_df_to_excel(df_export_prod)
             st.download_button("📥 Descargar Detalle Productos", data=excel_prod, file_name=f"Productos_Vendidos_{anio_p_sel}.xlsx")
-
         col_tipo1, col_tipo2 = st.columns([1, 2])
         with col_tipo1:
             ventas_por_tipo = df_p_anio.groupby('Tipo')['Venta_Neta'].sum().reset_index()
             fig_pie = px.pie(ventas_por_tipo, values='Venta_Neta', names='Tipo', hole=0.4, color_discrete_sequence=px.colors.qualitative.Set2)
             fig_pie.update_layout(height=350, title_text="Mix de Venta")
             st.plotly_chart(fig_pie, use_container_width=True)
-            
         with col_tipo2:
             st.markdown(f"**Top 10 Productos ({anio_p_sel})**")
             c_f1, c_f2 = st.columns(2)
@@ -483,7 +478,6 @@ with tab_prod:
                 tipo_ver = st.radio("Filtrar Tipo:", ["Todos", "Almacenable", "Servicio"], horizontal=True)
             with c_f2:
                 metrica_prod = st.radio("Ordenar por:", ["Monto (₡)", "Cantidad (Unid.)"], horizontal=True)
-            
             df_show = df_p_anio if tipo_ver == "Todos" else df_p_anio[df_p_anio['Tipo'] == tipo_ver]
             top_prod = df_show.groupby('Producto')[['Venta_Neta', 'quantity']].sum().reset_index()
             col_orden = 'Venta_Neta' if metrica_prod == "Monto (₡)" else 'quantity'
@@ -493,110 +487,117 @@ with tab_prod:
             fig_bar.update_layout(height=350, xaxis_title=metrica_prod, yaxis_title="")
             st.plotly_chart(fig_bar, use_container_width=True)
 
-# === PESTAÑA 3: RENTABILIDAD P&L (MODO AUDITORÍA) ===
+# === PESTAÑA 3: RENTABILIDAD (CONTROL PROJECT) ===
 with tab_renta:
     anio_r_sel = st.selectbox("Año Financiero", anios, key="renta_anio")
     
-    with st.spinner('Cargando datos contables para auditoría...'):
+    with st.spinner('Analizando P&L...'):
         df_pnl = cargar_pnl_contable(anio_r_sel)
     
     if not df_pnl.empty:
-        # 1. Asignar nombres de Planes y Cuentas
         if not df_analitica.empty:
             mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Plan_Nombre']))
-            mapa_nombres_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Cuenta_Nombre']))
-            
-            df_pnl['Plan_Negocio'] = df_pnl['id_cuenta_analitica'].map(mapa_cuentas).fillna("Sin Plan Asignado")
-            df_pnl['Cuenta_Analitica_Nombre'] = df_pnl['id_cuenta_analitica'].map(mapa_nombres_cuentas).fillna("-")
+            mapa_nombres = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Cuenta_Nombre']))
+            df_pnl['Plan_Negocio'] = df_pnl['id_cuenta_analitica'].map(mapa_cuentas).fillna("Sin Plan")
+            df_pnl['Cuenta_Analitica_Nombre'] = df_pnl['id_cuenta_analitica'].map(mapa_nombres).fillna("-")
         else:
-            df_pnl['Plan_Negocio'] = "Sin Estructura Analítica"
+            df_pnl['Plan_Negocio'] = "Sin Estructura"
             df_pnl['Cuenta_Analitica_Nombre'] = "-"
 
-        # 2. FILTROS INTERACTIVOS EN CASCADA
-        st.subheader("🕵️ Buscador por Plan y Cuenta Analítica")
-        
+        st.subheader("🕵️ Buscador de Proyectos")
         c_filt1, c_filt2 = st.columns(2)
         with c_filt1:
             lista_planes = sorted(df_pnl['Plan_Negocio'].unique().astype(str))
-            planes_sel = st.multiselect("1. Selecciona Planes:", lista_planes, default=lista_planes)
+            planes_sel = st.multiselect("1. Selecciona Planes:", lista_planes, default=[])
         
-        # Filtramos primero por plan para mostrar solo las cuentas relevantes en el segundo filtro
-        df_temp_planes = df_pnl[df_pnl['Plan_Negocio'].isin(planes_sel)]
-        
-        with c_filt2:
-            lista_cuentas = sorted(df_temp_planes['Cuenta_Analitica_Nombre'].unique().astype(str))
-            cuentas_sel = st.multiselect("2. Selecciona Cuentas Analíticas:", lista_cuentas, default=lista_cuentas)
-        
-        # 3. Filtrado Final (Plan AND Cuenta)
-        df_filtered = df_pnl[
-            (df_pnl['Plan_Negocio'].isin(planes_sel)) & 
-            (df_pnl['Cuenta_Analitica_Nombre'].isin(cuentas_sel))
-        ].copy()
-        
-        # 4. Cálculos Rápidos sobre la selección
-        if not df_filtered.empty:
-            total_venta_sel = df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum()
-            total_costo_sel = df_filtered[df_filtered['Clasificacion'].str.contains("Costo")]['Monto_Neto'].sum()
-            margen_sel = total_venta_sel - abs(total_costo_sel)
+        if not planes_sel:
+            st.info("👈 Selecciona un PLAN para ver el desglose detallado.")
+        else:
+            df_temp = df_pnl[df_pnl['Plan_Negocio'].isin(planes_sel)]
+            with c_filt2:
+                lista_cuentas = sorted(df_temp['Cuenta_Analitica_Nombre'].unique().astype(str))
+                cuentas_sel = st.multiselect("2. Selecciona Analíticas (Opcional):", lista_cuentas, default=lista_cuentas)
             
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Total Ingresos (Selección)", f"₡ {total_venta_sel:,.0f}")
-            k2.metric("Total Costos (Selección)", f"₡ {total_costo_sel:,.0f}")
-            k3.metric("Margen Bruto", f"₡ {margen_sel:,.0f}")
-        
-        # 5. Tabla Detallada CORREGIDA (FIX para StreamlitAPIException)
-        st.divider()
-        st.markdown("**Detalle de Movimientos Contables**")
-        
-        tabla_show = df_filtered[['date', 'name', 'Plan_Negocio', 'Cuenta_Analitica_Nombre', 'Clasificacion', 'Monto_Neto']].sort_values('date', ascending=False)
-        tabla_show.columns = ['Fecha', 'Descripción / Etiqueta', 'Plan Analítico', 'Cuenta Analítica', 'Tipo', 'Monto']
-        
-        st.dataframe(
-            tabla_show,
-            column_config={
-                "Monto": st.column_config.NumberColumn(
-                    "Monto",
-                    format="₡ %.2f"
-                ),
-                "Fecha": st.column_config.DateColumn(
-                    "Fecha",
-                    format="DD/MM/YYYY"
+            df_filtered = df_pnl[
+                (df_pnl['Plan_Negocio'].isin(planes_sel)) & 
+                (df_pnl['Cuenta_Analitica_Nombre'].isin(cuentas_sel))
+            ].copy()
+            
+            if not df_filtered.empty:
+                # KPIs CONTABLES
+                total_ventas = df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum()
+                total_mercaderia = df_filtered[df_filtered['Clasificacion'] == 'Costo Mercadería']['Monto_Neto'].sum()
+                total_wip = df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum()
+                total_horas_contable = df_filtered[df_filtered['Clasificacion'] == 'Costo Horas']['Monto_Neto'].sum()
+                
+                # DATOS EXTRA (ANALITICA REAL + INVENTARIO)
+                ids_cuentas_analiticas = df_filtered['id_cuenta_analitica'].dropna().unique().tolist()
+                
+                # Cargar Desglose Horas Studio
+                df_horas_detalle = cargar_detalle_horas_estructura(ids_cuentas_analiticas)
+                
+                # Cargar Inventario en Sitio
+                df_stock_sitio = cargar_inventario_ubicacion_proyecto(ids_cuentas_analiticas)
+                total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
+                
+                # --- TARJETAS ---
+                k1, k2, k3, k4, k5 = st.columns(5)
+                with k1: card_kpi("Ventas", total_ventas, "bg-green")
+                with k2: card_kpi("Costo Mercadería", total_mercaderia, "bg-orange")
+                with k3: card_kpi("WIP", total_wip, "bg-yellow")
+                with k4: card_kpi("Costo Horas (Contable)", total_horas_contable, "bg-blue")
+                with k5: card_kpi("Inventario Sitio", total_stock_sitio, "bg-purple")
+                
+                # --- SECCIONES DETALLE ---
+                
+                # 1. Desglose Horas
+                c_horas, c_stock = st.columns(2)
+                with c_horas:
+                    st.markdown("##### 🕒 Desglose de Horas (Normal / Extra)")
+                    if not df_horas_detalle.empty:
+                        resumen_horas = df_horas_detalle.groupby('Tipo_Hora')[['Horas', 'Costo']].sum().reset_index()
+                        st.dataframe(resumen_horas, column_config={"Costo": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
+                    else: st.caption("Sin registros de horas analíticas.")
+                
+                # 2. Desglose Inventario
+                with c_stock:
+                    st.markdown("##### 📦 Inventario en Ubicación del Proyecto")
+                    if not df_stock_sitio.empty:
+                        st.dataframe(df_stock_sitio[['Producto_Nombre', 'quantity', 'Valor_Total']], 
+                                     column_config={"Valor_Total": st.column_config.NumberColumn(format="₡ %.2f")}, 
+                                     hide_index=True, use_container_width=True)
+                    else: st.caption("Sin stock asignado a ubicación de proyecto.")
+
+                # 3. Tabla General Contable
+                st.divider()
+                st.markdown("**Detalle Movimientos Contables**")
+                st.dataframe(
+                    df_filtered[['date', 'name', 'Cuenta_Analitica_Nombre', 'Clasificacion', 'Monto_Neto']].sort_values('date', ascending=False),
+                    column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")},
+                    use_container_width=True, hide_index=True
                 )
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        excel_audit = convert_df_to_excel(df_filtered)
-        st.download_button("📥 Descargar Auditoría (Excel)", data=excel_audit, file_name=f"Auditoria_Rentabilidad_{anio_r_sel}.xlsx")
-        
-    else:
-        st.warning("No hay movimientos contables en los IDs configurados para este año.")
+            else: st.warning("Sin datos.")
+    else: st.warning("Sin movimientos analíticos.")
 
 # === PESTAÑA 4: INVENTARIO ===
 with tab_inv:
     if not df_cat.empty:
         st.subheader("⚠️ Detección de Baja Rotación (Productos Hueso)")
         anio_hueso = anio_p_sel if 'anio_p_sel' in locals() else datetime.now().year
-        
         df_stock_real = df_cat[df_cat['Stock'] > 0].copy()
         ids_vendidos = set(df_prod[df_prod['date'].dt.year == anio_hueso]['ID_Producto'].unique())
         df_zombies = df_stock_real[~df_stock_real['ID_Producto'].isin(ids_vendidos)].copy()
         df_zombies = df_zombies[df_zombies['create_date'].dt.year < anio_hueso]
         df_zombies = df_zombies[df_zombies['Tipo'] == 'Almacenable']
-        
         df_zombies = df_zombies.sort_values('Valor_Inventario', ascending=False)
         total_atrapado = df_zombies['Valor_Inventario'].sum()
-        
         col_down_z, _ = st.columns([1, 4])
         with col_down_z:
             excel_huesos = convert_df_to_excel(df_zombies[['Referencia', 'Producto', 'create_date', 'Stock', 'Costo', 'Valor_Inventario']])
             st.download_button("📥 Descargar Lista Huesos", data=excel_huesos, file_name=f"Productos_Hueso_{anio_hueso}.xlsx")
-
         m1, m2 = st.columns(2)
         m1.metric("Capital Inmovilizado", f"₡ {total_atrapado/1e6:,.1f} M")
         m2.metric("Items Sin Rotación", len(df_zombies))
-        
         st.dataframe(
             df_zombies[['Producto', 'create_date', 'Stock', 'Costo', 'Valor_Inventario']].head(50),
             column_config={
@@ -611,44 +612,27 @@ with tab_inv:
 with tab_cx:
     with st.spinner('Analizando deudas...'):
         df_cx = cargar_cartera()
-    
     if not df_cx.empty:
         total_deuda = df_cx['amount_residual'].sum()
         total_vencido = df_cx[df_cx['Dias_Vencido'] > 0]['amount_residual'].sum()
         pct_vencido = (total_vencido / total_deuda * 100) if total_deuda > 0 else 0
-        
         kcx1, kcx2, kcx3 = st.columns(3)
         kcx1.metric("Total por Cobrar", f"₡ {total_deuda/1e6:,.1f} M")
         kcx2.metric("Cartera Vencida (>0 días)", f"₡ {total_vencido/1e6:,.1f} M")
         kcx3.metric("Salud de Cartera", f"{100-pct_vencido:.1f}% Al Día", delta_color="normal" if pct_vencido < 20 else "inverse")
-        
         st.divider()
         col_cx_g1, col_cx_g2 = st.columns([2, 1])
-        
         with col_cx_g1:
             st.subheader("⏳ Antigüedad de Saldos")
             df_buckets = df_cx.groupby('Antiguedad')['amount_residual'].sum().reset_index()
-            colores_cx = {
-                "Por Vencer": "#2ecc71", 
-                "0-30 Días": "#f1c40f", 
-                "31-60 Días": "#e67e22", 
-                "61-90 Días": "#e74c3c", 
-                "+90 Días": "#c0392b"
-            }
+            colores_cx = {"Por Vencer": "#2ecc71", "0-30 Días": "#f1c40f", "31-60 Días": "#e67e22", "61-90 Días": "#e74c3c", "+90 Días": "#c0392b"}
             fig_cx = px.bar(df_buckets, x='Antiguedad', y='amount_residual', text_auto='.2s', color='Antiguedad', color_discrete_map=colores_cx)
             fig_cx.update_layout(showlegend=False, height=400)
             st.plotly_chart(fig_cx, use_container_width=True)
-            
         with col_cx_g2:
             st.subheader("🚨 Top Deudores")
             top_deudores = df_cx.groupby('Cliente')['amount_residual'].sum().sort_values(ascending=False).head(10).reset_index()
-            st.dataframe(
-                top_deudores,
-                column_config={"amount_residual": st.column_config.NumberColumn(format="₡ %.2f")},
-                hide_index=True,
-                use_container_width=True
-            )
-
+            st.dataframe(top_deudores, column_config={"amount_residual": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
         st.divider()
         col_down_cx, _ = st.columns([1, 4])
         with col_down_cx:
@@ -663,7 +647,6 @@ with tab_cli:
         st.subheader("🌍 Distribución de Ventas")
         anio_c_sel = st.selectbox("Año de Análisis", anios, key="cli_anio")
         df_c_anio = df_main[df_main['invoice_date'].dt.year == anio_c_sel]
-        
         col_geo1, col_geo2, col_cat = st.columns(3)
         with col_geo1:
             ventas_prov = df_c_anio.groupby('Provincia')['Venta_Neta'].sum().reset_index()
@@ -677,37 +660,29 @@ with tab_cli:
             ventas_cat = df_c_anio.groupby('Categoria_Cliente')['Venta_Neta'].sum().reset_index()
             fig_cat = px.pie(ventas_cat, values='Venta_Neta', names='Categoria_Cliente', hole=0.4)
             st.plotly_chart(fig_cat, use_container_width=True)
-
         st.divider()
-        
         col_d1, col_d2, col_d3 = st.columns(3)
         df_top_all = df_c_anio.groupby(['Cliente', 'Provincia', 'Zona_Comercial'])['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
         col_d1.download_button("📂 Ranking Completo", data=convert_df_to_excel(df_top_all), file_name=f"Ranking_Clientes_{anio_c_sel}.xlsx")
-        
         df_c_ant = df_main[df_main['invoice_date'].dt.year == (anio_c_sel - 1)]
         cli_antes = set(df_c_ant[df_c_ant['Venta_Neta'] > 0]['Cliente'])
         cli_ahora = set(df_c_anio[df_c_anio['Venta_Neta'] > 0]['Cliente'])
         lista_perdidos = list(cli_antes - cli_ahora)
         lista_nuevos = list(cli_ahora - cli_antes)
-        
         monto_perdido = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]['Venta_Neta'].sum() if lista_perdidos else 0
         monto_nuevo = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]['Venta_Neta'].sum() if lista_nuevos else 0
-        
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Total Clientes Activos", len(cli_ahora))
         k2.metric("Clientes Nuevos", len(lista_nuevos))
         k3.metric("Venta de Nuevos", f"₡ {monto_nuevo/1e6:,.1f} M")
         k4.metric("Venta Perdida (Churn)", f"₡ {monto_perdido/1e6:,.1f} M", delta=-len(lista_perdidos), delta_color="inverse")
-            
         if lista_perdidos:
             df_lost_all = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
             col_d2.download_button("📉 Lista Perdidos", data=convert_df_to_excel(df_lost_all), file_name=f"Clientes_Perdidos_{anio_c_sel}.xlsx")
         if lista_nuevos:
             df_new_all = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
             col_d3.download_button("🌱 Lista Nuevos", data=convert_df_to_excel(df_new_all), file_name=f"Clientes_Nuevos_{anio_c_sel}.xlsx")
-
         st.divider()
-        
         c_top, c_analisis = st.columns([1, 1])
         with c_top:
             st.subheader("🏆 Top 10 Clientes")
@@ -732,23 +707,19 @@ with tab_vend:
         col_sel1, col_sel2 = st.columns(2)
         with col_sel1: anio_v_sel = st.selectbox("Año de Evaluación", anios_v, key="vend_anio")
         with col_sel2: vendedor_sel = st.selectbox("Seleccionar Comercial", sorted(df_main['Vendedor'].unique()))
-            
         df_v_anio = df_main[(df_main['invoice_date'].dt.year == anio_v_sel) & (df_main['Vendedor'] == vendedor_sel)]
         df_v_ant = df_main[(df_main['invoice_date'].dt.year == (anio_v_sel - 1)) & (df_main['Vendedor'] == vendedor_sel)]
-        
         venta_ind = df_v_anio['Venta_Neta'].sum()
         facturas_ind = df_v_anio['name'].nunique()
         ticket_ind = (venta_ind / facturas_ind) if facturas_ind > 0 else 0
         cli_v_antes = set(df_v_ant[df_v_ant['Venta_Neta'] > 0]['Cliente'])
         cli_v_ahora = set(df_v_anio[df_v_anio['Venta_Neta'] > 0]['Cliente'])
         perdidos_v = list(cli_v_antes - cli_v_ahora)
-        
         kv1, kv2, kv3, kv4 = st.columns(4)
         kv1.metric(f"Venta Total {vendedor_sel}", f"₡ {venta_ind/1e6:,.1f} M")
         kv2.metric("Clientes Activos", len(cli_v_ahora))
         kv3.metric("Ticket Promedio", f"₡ {ticket_ind:,.0f}")
         kv4.metric("Clientes en Riesgo", len(perdidos_v), delta=-len(perdidos_v), delta_color="inverse")
-        
         st.divider()
         col_dv1, col_dv2 = st.columns(2)
         with col_dv1:
@@ -758,7 +729,6 @@ with tab_vend:
             if perdidos_v:
                 df_llamadas = df_v_ant[df_v_ant['Cliente'].isin(perdidos_v)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
                 st.download_button(f"📞 Descargar Lista Recuperación", data=convert_df_to_excel(df_llamadas), file_name=f"Recuperar_{vendedor_sel}.xlsx")
-
         st.divider()
         col_v_top, col_v_lost = st.columns(2)
         with col_v_top:
@@ -788,13 +758,11 @@ with tab_det:
             ultima_compra = df_cli['invoice_date'].max()
             dias_sin = (datetime.now() - ultima_compra).days
             provincia = df_cli.iloc[0]['Provincia'] if 'Provincia' in df_cli.columns else "N/A"
-            
             kc1, kc2, kc3, kc4 = st.columns(4)
             kc1.metric("Compras Históricas", f"₡ {total_comprado/1e6:,.1f} M")
             kc2.metric("Última Compra", ultima_compra.strftime('%d-%m-%Y'))
             kc3.metric("Días sin Comprar", dias_sin, delta=-dias_sin, delta_color="inverse")
             kc4.metric("Ubicación", provincia)
-            
             st.divider()
             c_hist, c_prod = st.columns([1, 1])
             with c_hist:
