@@ -275,7 +275,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v2.2")
+st.title("🚀 Monitor Comercial ALROTEK v2.3")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -544,14 +544,28 @@ with tab_renta:
             k2.metric("Total Costos (Selección)", f"₡ {total_costo_sel:,.0f}")
             k3.metric("Margen Bruto", f"₡ {margen_sel:,.0f}")
         
-        # 5. Tabla Detallada
+        # 5. Tabla Detallada CORREGIDA (FIX para StreamlitAPIException)
         st.divider()
         st.markdown("**Detalle de Movimientos Contables**")
         
         tabla_show = df_filtered[['date', 'name', 'Plan_Negocio', 'Cuenta_Analitica_Nombre', 'Clasificacion', 'Monto_Neto']].sort_values('date', ascending=False)
         tabla_show.columns = ['Fecha', 'Descripción / Etiqueta', 'Plan Analítico', 'Cuenta Analítica', 'Tipo', 'Monto']
         
-        st.dataframe(tabla_show.style.format({'Monto': '₡ {:,.2f}'}), use_container_width=True)
+        st.dataframe(
+            tabla_show,
+            column_config={
+                "Monto": st.column_config.NumberColumn(
+                    "Monto",
+                    format="₡ %.2f"
+                ),
+                "Fecha": st.column_config.DateColumn(
+                    "Fecha",
+                    format="DD/MM/YYYY"
+                )
+            },
+            use_container_width=True,
+            hide_index=True
+        )
         
         excel_audit = convert_df_to_excel(df_filtered)
         st.download_button("📥 Descargar Auditoría (Excel)", data=excel_audit, file_name=f"Auditoria_Rentabilidad_{anio_r_sel}.xlsx")
@@ -584,8 +598,12 @@ with tab_inv:
         m2.metric("Items Sin Rotación", len(df_zombies))
         
         st.dataframe(
-            df_zombies[['Producto', 'create_date', 'Stock', 'Costo', 'Valor_Inventario']].head(50)
-            .style.format({'Costo': '₡ {:,.0f}', 'Valor_Inventario': '₡ {:,.0f}', 'create_date': '{:%Y-%m-%d}'}),
+            df_zombies[['Producto', 'create_date', 'Stock', 'Costo', 'Valor_Inventario']].head(50),
+            column_config={
+                "Costo": st.column_config.NumberColumn(format="₡ %.2f"),
+                "Valor_Inventario": st.column_config.NumberColumn(format="₡ %.2f"),
+                "create_date": st.column_config.DateColumn(format="DD/MM/YYYY")
+            },
             use_container_width=True
         )
 
@@ -624,7 +642,12 @@ with tab_cx:
         with col_cx_g2:
             st.subheader("🚨 Top Deudores")
             top_deudores = df_cx.groupby('Cliente')['amount_residual'].sum().sort_values(ascending=False).head(10).reset_index()
-            st.dataframe(top_deudores.style.format({'amount_residual': '₡ {:,.0f}'}), hide_index=True, use_container_width=True)
+            st.dataframe(
+                top_deudores,
+                column_config={"amount_residual": st.column_config.NumberColumn(format="₡ %.2f")},
+                hide_index=True,
+                use_container_width=True
+            )
 
         st.divider()
         col_down_cx, _ = st.columns([1, 4])
