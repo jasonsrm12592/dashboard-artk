@@ -6,7 +6,7 @@ import plotly.express as px
 from datetime import datetime
 import io
 import os
-import ast  # LIBRERÍA NUEVA PARA SEGURIDAD
+import ast  # Librería para leer diccionarios de texto de forma segura
 
 # --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="Alrotek Sales Monitor", layout="wide")
@@ -89,7 +89,6 @@ def cargar_cartera():
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Facturas de cliente (out_invoice) publicadas (posted) y NO pagadas
         dominio = [
             ['move_type', '=', 'out_invoice'],
             ['state', '=', 'posted'],
@@ -109,7 +108,6 @@ def cargar_cartera():
             df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
             df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
             
-            # Calcular antigüedad
             hoy = pd.Timestamp.now()
             df['Dias_Vencido'] = (hoy - df['invoice_date_due']).dt.days
             
@@ -129,7 +127,6 @@ def cargar_cartera():
 
 @st.cache_data(ttl=3600)
 def cargar_datos_clientes_extendido(ids_clientes):
-    """Descarga ZONAS"""
     try:
         if not ids_clientes: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -183,7 +180,6 @@ def cargar_detalle_productos():
 
 @st.cache_data(ttl=3600)
 def cargar_inventario():
-    """Descarga STOCK"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -211,45 +207,34 @@ def cargar_inventario():
 
 @st.cache_data(ttl=3600)
 def cargar_estructura_analitica():
-    """Descarga RELACIÓN: CUENTA ANALÍTICA -> PLAN ANALÍTICO"""
+    """Descarga RELACIÓN: CUENTA ANALÍTICA -> PLAN ANALÍTICO (CORREGIDA)"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # 1. Traemos los PLANES (Ej: Proyectos, Mantenimientos, etc.)
+        # 1. Traemos los PLANES (Ej: Proyectos, Mantenimientos)
         ids_plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'search', [[['id', '!=', 0]]])
         plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'read', [ids_plans], {'fields': ['name']})
         df_plans = pd.DataFrame(plans).rename(columns={'id': 'plan_id', 'name': 'Plan_Nombre'})
         
         # 2. Traemos las CUENTAS y su respectivo PLAN_ID
         ids_acc = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'search', [[['active', 'in', [True, False]]]])
-        # Nota: En Odoo 16+ el campo es 'plan_id', en versiones anteriores puede ser 'group_id'
         accounts = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'read', [ids_acc], {'fields': ['name', 'plan_id']})
         df_acc = pd.DataFrame(accounts)
         
         if not df_acc.empty and not df_plans.empty:
-            # Limpieza: plan_id viene como tupla (id, nombre) o False
             df_acc['plan_id'] = df_acc['plan_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else (x if x else 0))
-            
-            # Cruzamos Cuentas con Planes
             df_full = pd.merge(df_acc, df_plans, on='plan_id', how='left')
             df_full.rename(columns={'id': 'id_cuenta_analitica', 'name': 'Cuenta_Nombre'}, inplace=True)
-            
-            # Rellenar planes vacíos
             df_full['Plan_Nombre'] = df_full['Plan_Nombre'].fillna("Sin Plan Asignado")
-            
-            # Retornamos solo lo vital: ID de la cuenta y Nombre del Plan al que pertenece
             return df_full[['id_cuenta_analitica', 'Cuenta_Nombre', 'Plan_Nombre']]
             
         return pd.DataFrame()
-    except Exception as e:
-        # st.error(f"Error cargando analítica: {e}") # Descomentar para debug
-        return pd.DataFrame()
+    except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def cargar_pnl_contable(anio):
-    """Descarga P&L REAL"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -292,7 +277,6 @@ def cargar_metas():
 # --- 5. INTERFAZ ---
 st.title("🚀 Monitor Comercial ALROTEK")
 
-# Definición de pestañas (Incluye nueva 'Cartera')
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
     "📦 Productos", 
@@ -355,81 +339,56 @@ with tab_kpis:
 
         c_graf, c_vend = st.columns([2, 1])
         with c_graf:
-           # --- GRÁFICO POR PLAN ANALÍTICO (CORREGIDO) ---
+            # --- NUEVA LÓGICA DE ANALÍTICA ---
             st.subheader("📊 Ventas por Plan Analítico")
             if not df_prod.empty:
                 df_lineas = df_prod[df_prod['date'].dt.year == anio_sel].copy()
                 
-                # Crear diccionario maestro: { 'ID_Cuenta_String': 'Nombre_Del_Plan' }
+                # Mapeo: ID Cuenta -> Nombre Plan
                 mapa_planes = {}
                 if not df_analitica.empty:
-                    # Aseguramos que la clave sea string para coincidir con el JSON de Odoo
                     mapa_planes = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre']))
                 
                 def clasificar_plan_estricto(dist):
-                    """Analiza el diccionario de distribución y busca el Plan Padre"""
-                    if not dist: 
-                        return "Sin Analítica (Retail)" # O "Default" si prefieres agruparlo ahí
+                    if not dist: return "Sin Analítica (Retail)"
                     try:
-                        # Convertir string seguro a diccionario
                         d = dist if isinstance(dist, dict) else ast.literal_eval(str(dist))
                         if not d: return "Sin Analítica (Retail)"
-                        
-                        # Iterar sobre las cuentas encontradas en la línea
-                        # Odoo devuelve {'id_cuenta': porcentaje}
-                        for id_cuenta in d.keys():
-                            nombre_plan = mapa_planes.get(str(id_cuenta))
-                            if nombre_plan: 
-                                return nombre_plan # Devuelve el primer Plan encontrado (Ej: MANTENIMIENTOS)
-                    except: 
-                        pass
-                    return "Analítica Desconocida"
-
-                # Aplicamos la nueva clasificación
-                df_lineas['Plan_Agrupado'] = df_lineas['analytic_distribution'].apply(clasificar_plan_estricto)
-                
-                # Agrupamos y sumamos
-                ventas_linea = df_lineas.groupby('Plan_Agrupado')['Venta_Neta'].sum().reset_index()
-                
-                # Gráfico
-                fig_pie = px.pie(ventas_linea, values='Venta_Neta', names='Plan_Agrupado', hole=0.4, 
-                                 color_discrete_sequence=px.colors.qualitative.Prism)
-                fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=350)
-                st.plotly_chart(fig_pie, use_container_width=True)
-                
-                with st.expander("Ver Detalle por Plan"):
-                    st.dataframe(ventas_linea.sort_values('Venta_Neta', ascending=False).style.format({'Venta_Neta': '₡ {:,.0f}'}), use_container_width=True)
-            else:
-                st.info("Sin datos de productos para generar el gráfico.")
-                
-                # --- VERSIÓN SEGURA DE CLASIFICACIÓN ---
-                def clasificar_linea(dist):
-                    if not dist: return "Retail / Mostrador"
-                    try:
-                        d = dist if isinstance(dist, dict) else ast.literal_eval(str(dist))
-                        if not d: return "Retail / Mostrador"
                         for k in d.keys():
-                            plan = mapa_cuentas.get(str(k))
+                            plan = mapa_planes.get(str(k))
                             if plan: return plan
                     except: pass
-                    return "Otros Proyectos"
+                    return "Analítica Desconocida"
 
-                df_lineas['Linea_Negocio'] = df_lineas['analytic_distribution'].apply(clasificar_linea)
-                ventas_linea = df_lineas.groupby('Linea_Negocio')['Venta_Neta'].sum().reset_index()
+                df_lineas['Plan_Agrupado'] = df_lineas['analytic_distribution'].apply(clasificar_plan_estricto)
                 
-                fig_pie = px.pie(ventas_linea, values='Venta_Neta', names='Linea_Negocio', hole=0.4, 
+                # 1. Gráfico de Pastel (Total)
+                ventas_linea = df_lineas.groupby('Plan_Agrupado')['Venta_Neta'].sum().reset_index()
+                fig_pie = px.pie(ventas_linea, values='Venta_Neta', names='Plan_Agrupado', hole=0.4, 
                                  color_discrete_sequence=px.colors.qualitative.Prism)
-                fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=350)
+                fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=300)
                 st.plotly_chart(fig_pie, use_container_width=True)
                 
-                with st.expander("Ver Montos"):
-                    st.dataframe(ventas_linea.sort_values('Venta_Neta', ascending=False).style.format({'Venta_Neta': '₡ {:,.0f}'}), use_container_width=True)
+                # 2. Gráfico de Barras Apiladas por Mes (NUEVO)
+                st.subheader("📅 Evolución Mensual por Plan")
+                df_lineas['Mes_Nombre'] = df_lineas['date'].dt.strftime('%m-%b')
+                df_lineas['Mes_Num'] = df_lineas['date'].dt.month
+                
+                ventas_mes_plan = df_lineas.groupby(['Mes_Num', 'Mes_Nombre', 'Plan_Agrupado'])['Venta_Neta'].sum().reset_index()
+                ventas_mes_plan = ventas_mes_plan.sort_values('Mes_Num')
+                
+                fig_stack = px.bar(ventas_mes_plan, x='Mes_Nombre', y='Venta_Neta', color='Plan_Agrupado',
+                                   title="Mix de Ventas Mensual", text_auto='.2s',
+                                   color_discrete_sequence=px.colors.qualitative.Prism)
+                fig_stack.update_layout(height=400, barmode='stack', xaxis_title="", yaxis_title="Venta Total")
+                st.plotly_chart(fig_stack, use_container_width=True)
+                
             else:
                 st.info("Sin datos de productos.")
 
             st.divider()
 
-            # PREPARACIÓN DATOS MENSUALES
+            # GRÁFICO META Y COMPARATIVO GLOBAL
             v_mes_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
             v_mes_act.columns = ['Mes_Num', 'Venta_Actual']
             v_mes_ant = df_ant_data.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
@@ -440,28 +399,15 @@ with tab_kpis:
             df_chart = pd.merge(df_chart, v_mes_ant, on='Mes_Num', how='left').fillna(0)
             df_chart = pd.merge(df_chart, v_mes_act, on='Mes_Num', how='left').fillna(0)
             df_chart = pd.merge(df_chart, v_metas, on='Mes_Num', how='left').fillna(0)
-            
             nombres_meses = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
             df_chart['Mes_Nombre'] = df_chart['Mes_Num'].map(nombres_meses)
 
-            # GRÁFICO 1: META
-            st.subheader(f"🎯 Desempeño vs Meta ({anio_sel})")
-            colores = ['#27ae60' if r >= m else '#c0392b' for r, m in zip(df_chart['Venta_Actual'], df_chart['Meta'])]
+            st.subheader(f"🎯 Comparativo vs Meta ({anio_sel})")
             fig1 = go.Figure()
-            fig1.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'], name='Venta', marker_color=colores))
+            fig1.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'], name='Venta Real', marker_color='#2980b9'))
             fig1.add_trace(go.Scatter(x=df_chart['Mes_Nombre'], y=df_chart['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
             fig1.update_layout(template="plotly_white", height=350, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig1, use_container_width=True)
-
-            st.divider()
-
-            # GRÁFICO 2: COMPARATIVO
-            st.subheader(f"📅 Comparativo {anio_sel} vs {anio_ant}")
-            fig2 = go.Figure()
-            fig2.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Anterior'], name=f'{anio_ant}', marker_color='#95a5a6', opacity=0.6))
-            fig2.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'], name=f'{anio_sel}', marker_color='#2980b9'))
-            fig2.update_layout(template="plotly_white", height=350, legend=dict(orientation="h", y=1.1), barmode='group')
-            st.plotly_chart(fig2, use_container_width=True)
             
         with c_vend:
             st.subheader("🏆 Top Vendedores")
@@ -621,7 +567,7 @@ with tab_inv:
             use_container_width=True
         )
 
-# === PESTAÑA 5 (NUEVA): CARTERA ===
+# === PESTAÑA 5: CARTERA (NUEVA) ===
 with tab_cx:
     with st.spinner('Analizando deudas...'):
         df_cx = cargar_cartera()
@@ -631,15 +577,12 @@ with tab_cx:
         total_vencido = df_cx[df_cx['Dias_Vencido'] > 0]['amount_residual'].sum()
         pct_vencido = (total_vencido / total_deuda * 100) if total_deuda > 0 else 0
         
-        # 1. KPIs Superiores
         kcx1, kcx2, kcx3 = st.columns(3)
         kcx1.metric("Total por Cobrar", f"₡ {total_deuda/1e6:,.1f} M")
         kcx2.metric("Cartera Vencida (>0 días)", f"₡ {total_vencido/1e6:,.1f} M")
         kcx3.metric("Salud de Cartera", f"{100-pct_vencido:.1f}% Al Día", delta_color="normal" if pct_vencido < 20 else "inverse")
         
         st.divider()
-        
-        # 2. Gráficos Principales
         col_cx_g1, col_cx_g2 = st.columns([2, 1])
         
         with col_cx_g1:
@@ -828,5 +771,3 @@ with tab_det:
                         df_hist = df_prod_cli.groupby(['date', 'Producto'])[['quantity', 'Venta_Neta']].sum().reset_index().sort_values('date', ascending=False)
                         st.download_button("📥 Descargar Historial", data=convert_df_to_excel(df_hist), file_name=f"Historial_{cliente_sel}.xlsx")
                     else: st.info("No hay detalle de productos.")
-
-
