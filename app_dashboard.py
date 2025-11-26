@@ -66,8 +66,8 @@ def cargar_datos_generales():
         if not df.empty:
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
             df['Mes'] = df['invoice_date'].dt.to_period('M').dt.to_timestamp()
+            df['Mes_Num'] = df['invoice_date'].dt.month # Para comparar años mes a mes
             df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
-            # Importante: Odoo devuelve [ID, Nombre], extraemos el nombre
             df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
             df['Venta_Neta'] = df['amount_untaxed_signed']
             
@@ -155,19 +155,21 @@ def cargar_metas():
     if os.path.exists("metas.xlsx"):
         df = pd.read_excel("metas.xlsx")
         df['Mes'] = pd.to_datetime(df['Mes'])
+        # Asegurar que hay columna de mes numérico para cruces
+        df['Mes_Num'] = df['Mes'].dt.month
+        df['Anio'] = df['Mes'].dt.year
         return df
-    return pd.DataFrame({'Mes': [], 'Meta': []})
+    return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
 st.title("🚀 Monitor Comercial ALROTEK")
 
-# AHORA SON 5 PESTAÑAS
 tab_kpis, tab_prod, tab_inv, tab_cli, tab_vend = st.tabs([
     "📊 Visión General", 
     "📦 Ventas por Producto", 
     "🧟 Control Inventario", 
     "👥 Inteligencia Clientes",
-    "💼 Desempeño Vendedores" # <--- NUEVA
+    "💼 Desempeño Vendedores"
 ])
 
 with st.spinner('Sincronizando todo...'):
@@ -176,16 +178,20 @@ with st.spinner('Sincronizando todo...'):
     df_cat = cargar_inventario()
     df_metas = cargar_metas()
 
-# === PESTAÑA 1: GENERAL ===
+# === PESTAÑA 1: GENERAL (COMPARATIVO) ===
 with tab_kpis:
     if not df_main.empty:
         anios = sorted(df_main['invoice_date'].dt.year.unique(), reverse=True)
-        anio_sel = st.selectbox("Año Fiscal", anios, key="kpi_anio")
+        anio_sel = st.selectbox("Año Fiscal (Principal)", anios, key="kpi_anio")
+        anio_ant = anio_sel - 1
         
+        # Datos Año Actual
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
         
+        # KPIs
         venta = df_anio['Venta_Neta'].sum()
-        meta = df_metas[df_metas['Mes'].dt.year == anio_sel]['Meta'].sum()
+        metas_filtradas = df_metas[df_metas['Anio'] == anio_sel]
+        meta = metas_filtradas['Meta'].sum()
         cant_facturas = df_anio['name'].nunique()
         ticket_promedio = (venta / cant_facturas) if cant_facturas > 0 else 0
         
@@ -197,28 +203,74 @@ with tab_kpis:
 
         st.divider()
         
+        # Botón Descarga General
         col_down, _ = st.columns([1, 4])
         with col_down:
             excel_data = convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Vendedor', 'Venta_Neta']])
             st.download_button("📥 Descargar Detalle Facturas", data=excel_data, file_name=f"Ventas_{anio_sel}.xlsx")
 
+        # --- GRÁFICO COMPARATIVO (NUEVO) ---
         c_graf, c_vend = st.columns([2, 1])
         with c_graf:
-            v_mes = df_anio.groupby('Mes')['Venta_Neta'].sum().reset_index()
-            dash = pd.merge(v_mes, df_metas, left_on='Mes', right_on='Mes', how='left').fillna(0)
-            cols = ['#27ae60' if r >= m else '#c0392b' for r, m in zip(dash['Venta_Neta'], dash['Meta'])]
+            # Preparar datos Año Actual
+            v_mes_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
+            v_mes_act.columns = ['Mes_Num', 'Venta_Actual']
             
+            # Preparar datos Año Anterior
+            df_ant = df_main[df_main['invoice_date'].dt.year == anio_ant]
+            v_mes_ant = df_ant.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
+            v_mes_ant.columns = ['Mes_Num', 'Venta_Anterior']
+            
+            # Preparar Metas
+            v_metas = metas_filtradas.groupby('Mes_Num')['Meta'].sum().reset_index()
+            
+            # Unir todo en un solo DataFrame Maestro
+            df_chart = pd.DataFrame({'Mes_Num': range(1, 13)})
+            df_chart = pd.merge(df_chart, v_mes_ant, on='Mes_Num', how='left').fillna(0)
+            df_chart = pd.merge(df_chart, v_mes_act, on='Mes_Num', how='left').fillna(0)
+            df_chart = pd.merge(df_chart, v_metas, on='Mes_Num', how='left').fillna(0)
+            
+            # Nombres de meses para el eje X
+            nombres_meses = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 
+                             7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
+            df_chart['Mes_Nombre'] = df_chart['Mes_Num'].map(nombres_meses)
+
+            # Construir Gráfico Combinado
             fig = go.Figure()
-            fig.add_trace(go.Bar(x=dash['Mes'], y=dash['Venta_Neta'], name='Venta', marker_color=cols))
-            fig.add_trace(go.Scatter(x=dash['Mes'], y=dash['Meta'], name='Meta', line=dict(color='#f1c40f', width=4, dash='dash')))
-            fig.update_layout(title="Evolución Mensual", height=400, template="plotly_white")
+            
+            # 1. Barra Año Anterior (Gris o tenue)
+            fig.add_trace(go.Bar(
+                x=df_chart['Mes_Nombre'], y=df_chart['Venta_Anterior'],
+                name=f'{anio_ant}', marker_color='#95a5a6', opacity=0.6
+            ))
+            
+            # 2. Barra Año Actual (Color principal)
+            fig.add_trace(go.Bar(
+                x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'],
+                name=f'{anio_sel}', marker_color='#2980b9',
+                text=df_chart['Venta_Actual'].apply(lambda x: f'{x/1e6:.0f}' if x > 0 else ''),
+                textposition='auto'
+            ))
+            
+            # 3. Línea de Meta
+            fig.add_trace(go.Scatter(
+                x=df_chart['Mes_Nombre'], y=df_chart['Meta'],
+                name='Meta', line=dict(color='#f1c40f', width=3, dash='dot')
+            ))
+            
+            fig.update_layout(
+                title=f"Comparativo Mensual: {anio_sel} vs {anio_ant}", 
+                template="plotly_white", 
+                height=450,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
             st.plotly_chart(fig, use_container_width=True)
             
         with c_vend:
             st.subheader("🏆 Top Vendedores")
             rank = df_anio.groupby('Vendedor')['Venta_Neta'].sum().sort_values().tail(10)
             fig_v = go.Figure(go.Bar(x=rank.values, y=rank.index, orientation='h', text=rank.apply(lambda x: f'{x/1e6:.1f}M'), textposition='auto'))
-            fig_v.update_layout(height=400, margin=dict(l=10, r=10, t=30, b=10))
+            fig_v.update_layout(height=450, margin=dict(l=10, r=10, t=30, b=10))
             st.plotly_chart(fig_v, use_container_width=True)
 
 # === PESTAÑA 2: PRODUCTOS ===
@@ -249,6 +301,7 @@ with tab_prod:
             st.markdown(f"**Top 10 Productos ({anio_p_sel})**")
             tipo_ver = st.radio("Ver:", ["Todos", "Almacenable", "Servicio"], horizontal=True)
             df_show = df_p_anio if tipo_ver == "Todos" else df_p_anio[df_p_anio['Tipo'] == tipo_ver]
+            
             top_prod = df_show.groupby('Producto')[['Venta_Neta', 'quantity']].sum().reset_index()
             top_10 = top_prod.sort_values('Venta_Neta', ascending=False).head(10).sort_values('Venta_Neta', ascending=True)
             
@@ -268,6 +321,7 @@ with tab_inv:
         df_zombies = df_stock_real[~df_stock_real['ID_Producto'].isin(ids_vendidos)].copy()
         df_zombies = df_zombies[df_zombies['create_date'].dt.year < anio_hueso]
         df_zombies = df_zombies[df_zombies['Tipo'] == 'Almacenable']
+        
         df_zombies = df_zombies.sort_values('Valor_Inventario', ascending=False)
         total_atrapado = df_zombies['Valor_Inventario'].sum()
         
@@ -280,12 +334,11 @@ with tab_inv:
         m1.metric("Capital Inmovilizado", f"₡ {total_atrapado/1e6:,.1f} M")
         m2.metric("Items Sin Rotación", len(df_zombies))
         
-        # Gráfico Huesos
-        top_zombies = df_zombies.head(15).sort_values('Valor_Inventario', ascending=True)
-        fig_z = px.bar(top_zombies, x='Valor_Inventario', y='Producto', orientation='h', 
-                       text_auto='.2s', color='Valor_Inventario', color_continuous_scale='Reds')
-        fig_z.update_layout(height=500, xaxis_title="Monto Atrapado (Costo)")
-        st.plotly_chart(fig_z, use_container_width=True)
+        st.dataframe(
+            df_zombies[['Producto', 'create_date', 'Stock', 'Costo', 'Valor_Inventario']].head(50)
+            .style.format({'Costo': '₡ {:,.0f}', 'Valor_Inventario': '₡ {:,.0f}', 'create_date': '{:%Y-%m-%d}'}),
+            use_container_width=True
+        )
 
 # === PESTAÑA 4: CLIENTES ===
 with tab_cli:
@@ -300,7 +353,22 @@ with tab_cli:
         lista_perdidos = list(cli_antes - cli_ahora)
         lista_nuevos = list(cli_ahora - cli_antes)
         
-        # Descargas
+        monto_perdido = 0
+        if lista_perdidos:
+            monto_perdido = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]['Venta_Neta'].sum()
+            
+        monto_nuevo = 0
+        if lista_nuevos:
+            monto_nuevo = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]['Venta_Neta'].sum()
+        
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Clientes Activos", len(cli_ahora))
+        k2.metric("Clientes Nuevos", len(lista_nuevos))
+        k3.metric("Venta de Nuevos", f"₡ {monto_nuevo/1e6:,.1f} M")
+        k4.metric("Venta Perdida (Churn)", f"₡ {monto_perdido/1e6:,.1f} M", delta=-len(lista_perdidos), delta_color="inverse")
+        
+        st.divider()
+        
         st.subheader("📥 Descargar Reportes")
         col_d1, col_d2, col_d3 = st.columns(3)
         
@@ -354,41 +422,52 @@ with tab_vend:
         
         anios_v = sorted(df_main['invoice_date'].dt.year.unique(), reverse=True)
         col_sel1, col_sel2 = st.columns(2)
-        
         with col_sel1:
             anio_v_sel = st.selectbox("Año de Evaluación", anios_v, key="vend_anio")
         
-        # Obtener lista de vendedores
         lista_vendedores = sorted(df_main['Vendedor'].unique())
         with col_sel2:
             vendedor_sel = st.selectbox("Seleccionar Comercial", lista_vendedores)
             
-        # Filtrar Datos
         df_v_anio = df_main[(df_main['invoice_date'].dt.year == anio_v_sel) & (df_main['Vendedor'] == vendedor_sel)]
         df_v_ant = df_main[(df_main['invoice_date'].dt.year == (anio_v_sel - 1)) & (df_main['Vendedor'] == vendedor_sel)]
         
-        # KPIs Individuales
         venta_ind = df_v_anio['Venta_Neta'].sum()
         facturas_ind = df_v_anio['name'].nunique()
         ticket_ind = (venta_ind / facturas_ind) if facturas_ind > 0 else 0
         
-        # Cálculo de clientes perdidos DEL VENDEDOR
         cli_v_antes = set(df_v_ant[df_v_ant['Venta_Neta'] > 0]['Cliente'])
         cli_v_ahora = set(df_v_anio[df_v_anio['Venta_Neta'] > 0]['Cliente'])
         perdidos_v = list(cli_v_antes - cli_v_ahora)
         
         kv1, kv2, kv3, kv4 = st.columns(4)
-        kv1.metric(f"Venta Total {vendedor_sel}", f"₡ {venta_ind/1e6:,.1f} M")
+        kv1.metric(f"Venta Total", f"₡ {venta_ind/1e6:,.1f} M")
         kv2.metric("Clientes Activos", len(cli_v_ahora))
         kv3.metric("Ticket Promedio", f"₡ {ticket_ind:,.0f}")
-        kv4.metric("Clientes en Riesgo (Perdidos)", len(perdidos_v), delta=-len(perdidos_v), delta_color="inverse")
+        kv4.metric("Clientes en Riesgo", len(perdidos_v), delta=-len(perdidos_v), delta_color="inverse")
         
+        st.divider()
+        
+        # Botones Descarga Vendedor
+        col_dv1, col_dv2 = st.columns(2)
+        with col_dv1:
+            # Descarga Detalle Ventas del Vendedor
+            excel_vend = convert_df_to_excel(df_v_anio[['invoice_date', 'name', 'Cliente', 'Venta_Neta']])
+            st.download_button(f"📥 Descargar Ventas {vendedor_sel}", data=excel_vend, file_name=f"Ventas_{vendedor_sel}_{anio_v_sel}.xlsx")
+            
+        with col_dv2:
+            if perdidos_v:
+                df_llamadas = df_v_ant[df_v_ant['Cliente'].isin(perdidos_v)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
+                df_llamadas.columns = ['Cliente', 'Compra_Año_Pasado']
+                excel_call = convert_df_to_excel(df_llamadas)
+                st.download_button(f"📞 Descargar Lista Recuperación", data=excel_call, file_name=f"Recuperar_{vendedor_sel}.xlsx")
+
         st.divider()
         
         col_v_top, col_v_lost = st.columns(2)
         
         with col_v_top:
-            st.subheader(f"🌟 Mejores Clientes de {vendedor_sel}")
+            st.subheader(f"🌟 Mejores Clientes")
             if not df_v_anio.empty:
                 top_cli_v = df_v_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
                 fig_vt = px.bar(top_cli_v, x=top_cli_v.values, y=top_cli_v.index, orientation='h', text_auto='.2s', color=top_cli_v.values)
@@ -397,22 +476,12 @@ with tab_vend:
                 st.info("Sin ventas registradas en este periodo.")
                 
         with col_v_lost:
-            st.subheader("⚠️ Cartera Perdida (Prioridad Recuperación)")
+            st.subheader("⚠️ Cartera Perdida")
             if perdidos_v:
                 df_lost_v = df_v_ant[df_v_ant['Cliente'].isin(perdidos_v)]
-                # Ordenar por quién compraba más el año pasado
                 top_lost_v = df_lost_v.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-                
-                fig_vl = px.bar(top_lost_v, x=top_lost_v.values, y=top_lost_v.index, orientation='h', 
-                                text_auto='.2s', color_discrete_sequence=['#e74c3c'])
+                fig_vl = px.bar(top_lost_v, x=top_lost_v.values, y=top_lost_v.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])
                 fig_vl.update_layout(xaxis_title="Monto Comprado Año Anterior")
                 st.plotly_chart(fig_vl, use_container_width=True)
-                
-                # Botón descarga lista de llamadas
-                st.markdown("##### 📞 Descargar Lista de Llamadas")
-                df_llamadas = df_lost_v.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
-                df_llamadas.columns = ['Cliente', 'Compra_Año_Pasado']
-                excel_call = convert_df_to_excel(df_llamadas)
-                st.download_button(f"📥 Descargar Perdidos de {vendedor_sel}", data=excel_call, file_name=f"Recuperacion_{vendedor_sel}.xlsx")
             else:
-                st.success(f"¡Excelente! {vendedor_sel} retuvo al 100% de su cartera.")
+                st.success(f"Excelente retención.")
