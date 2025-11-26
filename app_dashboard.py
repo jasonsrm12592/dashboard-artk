@@ -28,6 +28,7 @@ hide_st_style = """
             }
             .kpi-title { font-size: 0.9rem; font-weight: bold; opacity: 0.9; }
             .kpi-value { font-size: 1.4rem; font-weight: bold; margin-top: 5px; }
+            .kpi-note { font-size: 0.7rem; opacity: 0.8; margin-top: 5px; }
             
             .bg-green { background-color: #27ae60; }
             .bg-orange { background-color: #e67e22; }
@@ -63,11 +64,13 @@ def convert_df_to_excel(df):
         df.to_excel(writer, index=False, sheet_name='Datos')
     return output.getvalue()
 
-def card_kpi(titulo, valor, color_class):
+def card_kpi(titulo, valor, color_class, nota=""):
+    val_fmt = f"₡ {valor:,.0f}" if isinstance(valor, (int, float)) else valor
     st.markdown(f"""
     <div class="kpi-card {color_class}">
         <div class="kpi-title">{titulo}</div>
-        <div class="kpi-value">₡ {valor:,.0f}</div>
+        <div class="kpi-value">{val_fmt}</div>
+        <div class="kpi-note">{nota}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -259,84 +262,91 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=900)
-def cargar_inventario_ubicacion_proyecto_v2(ids_cuentas_analiticas, nombres_cuentas_analiticas=None):
+def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuentas_analiticas):
     """
-    ESTRATEGIA TRIPLE PARA ENCONTRAR LA UBICACIÓN:
-    1. Buscar por ID de Cuenta Analítica (Directo).
-    2. Buscar por ID de Proyecto (Puente: Analytic -> Project).
-    3. Buscar por Nombre (Fuzzy Match "2025-47").
+    Lógica Multicriterio y Multi-Bodega:
+    1. Busca IDs de Proyecto (Analytic -> Project)
+    2. Busca ubicaciones que coincidan con ID Analítica O ID Proyecto en el campo Studio.
+    3. ADICIONAL: Busca ubicaciones que coincidan por NOMBRE (Fuzzy match).
+    4. ACUMULA todas las ubicaciones encontradas.
+    5. Busca stock dentro de TODAS ellas (y sus hijas).
+    Retorna: DataFrame, Status, Lista de Nombres de Bodegas Encontradas
     """
     try:
-        if not ids_cuentas_analiticas: return pd.DataFrame()
+        if not ids_cuentas_analiticas: return pd.DataFrame(), "SIN_SELECCION", []
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # 1. Obtener IDs limpios
-        ids_clean_analytic = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
-        
-        # 2. Buscar IDs de Proyectos asociados a estas cuentas analíticas
+        # A. Recopilar IDs para buscar
+        ids_analytic_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         ids_projects = []
-        if ids_clean_analytic:
+        if ids_analytic_clean:
             try:
-                dom_proj = [['analytic_account_id', 'in', ids_clean_analytic]]
-                ids_projects = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [dom_proj])
+                ids_found = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', ids_analytic_clean]]])
+                ids_projects = ids_found
             except: pass
+        
+        ids_search = list(set(ids_analytic_clean + ids_projects))
+        
+        # B. BÚSQUEDA 1: Por coincidencia exacta en campo Studio
+        ids_locs_studio = []
+        if ids_search:
+            # Buscamos sin restricción de 'usage' para encontrar carpetas padre
+            ids_locs_studio = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', ids_search]]])
+        
+        # C. BÚSQUEDA 2: Por Nombre (Fuzzy Match)
+        ids_locs_name = []
+        if nombres_cuentas_analiticas:
+            for nombre in nombres_cuentas_analiticas:
+                if isinstance(nombre, str) and len(nombre) > 4: # Evitar busquedas cortas
+                    # Tomamos los primeros 7 caracteres (ej: "2025-47") para buscar coincidencias
+                    keyword = nombre.split(' ')[0] 
+                    if len(keyword) > 3:
+                        found = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['name', 'ilike', keyword]]])
+                        ids_locs_name.extend(found)
+        
+        # D. Unificar Ubicaciones
+        ids_locs_final = list(set(ids_locs_studio + ids_locs_name))
+        
+        if not ids_locs_final:
+            return pd.DataFrame(), "NO_BODEGA", []
             
-        # Lista maestra de IDs para buscar en x_studio_field_qCgKk
-        ids_to_search = list(set(ids_clean_analytic + ids_projects))
+        # E. Obtener Nombres de las Bodegas (Para el usuario)
+        loc_names_data = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_locs_final], {'fields': ['complete_name']})
+        loc_names = [l['complete_name'] for l in loc_names_data]
         
-        # 3. Construir Dominio de Búsqueda de Ubicación (Triple Check)
-        # Opción A: Por ID (Analitica o Proyecto)
-        dominio_loc = ['|', ['x_studio_field_qCgKk', 'in', ids_to_search]]
-        
-        # Opción B: Por Nombre (Si tenemos nombres)
-        if nombres_cuentas_analiticas:
-            for nombre in nombres_cuentas_analiticas:
-                # Tomamos la primera parte del nombre "2025-47" para ser más efectivos
-                short_name = nombre.split(' ')[0] if nombre else ""
-                if len(short_name) > 3:
-                    dominio_loc = ['|', ['name', 'ilike', short_name]] + dominio_loc
-                    
-        # Cerrar dominio (siempre debe haber un término final si usamos '|', pero aquí concatenamos)
-        # Corrección: La sintaxis polaca de Odoo '|' A B requiere cuidado.
-        # Simplificamos: Buscamos ID primero. Si falla, buscamos Nombre.
-        
-        # BUSQUEDA 1: Por ID
-        ids_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', ids_to_search]]])
-        
-        # BUSQUEDA 2: Por Nombre (Solo si tenemos nombres y Búsqueda 1 falló o para complementar)
-        if nombres_cuentas_analiticas:
-            for nombre in nombres_cuentas_analiticas:
-                short_name = nombre.split(' ')[0]
-                if len(short_name) > 3:
-                    ids_locs_name = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['name', 'ilike', short_name]]])
-                    ids_locs = list(set(ids_locs + ids_locs_name))
-        
-        if not ids_locs: return pd.DataFrame()
-        
-        # 4. Traer Quants (Recursivo child_of)
+        # F. Buscar Stock (Quant)
         dominio_quant = [
-            ['location_id', 'child_of', ids_locs], 
+            ['location_id', 'child_of', ids_locs_final], 
             ['company_id', '=', COMPANY_ID]
         ]
-        campos_quant = ['product_id', 'quantity', 'location_id']
         ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
+        
+        if not ids_quants:
+            return pd.DataFrame(), "NO_STOCK", loc_names
+            
+        campos_quant = ['product_id', 'quantity']
         data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': campos_quant})
         
         df = pd.DataFrame(data_quants)
-        if not df.empty:
-            df = df.groupby('product_id').agg({'quantity': 'sum'}).reset_index()
-            df['pid'] = df['product_id'].apply(lambda x: x[0] if x else 0)
-            ids_prods = df['pid'].unique().tolist()
-            costos = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'name']})
-            df_costos = pd.DataFrame(costos).rename(columns={'id': 'pid', 'standard_price': 'Costo_Unit', 'name': 'Producto_Nombre'})
-            df = pd.merge(df, df_costos, on='pid', how='left')
-            df['Valor_Total'] = df['quantity'] * df['Costo_Unit']
-            df = df[df['quantity'] != 0]
-            
-        return df
-    except Exception: return pd.DataFrame()
+        if df.empty: return pd.DataFrame(), "NO_STOCK", loc_names
+        
+        # G. Procesar y Valorizar
+        df = df.groupby('product_id').agg({'quantity': 'sum'}).reset_index()
+        df['pid'] = df['product_id'].apply(lambda x: x[0] if x else 0)
+        
+        ids_prods = df['pid'].unique().tolist()
+        costos = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'name']})
+        df_costos = pd.DataFrame(costos).rename(columns={'id': 'pid', 'standard_price': 'Costo_Unit', 'name': 'Producto_Nombre'})
+        
+        df = pd.merge(df, df_costos, on='pid', how='left')
+        df['Valor_Total'] = df['quantity'] * df['Costo_Unit']
+        df = df[df['quantity'] != 0]
+        
+        return df, "OK", loc_names
+
+    except Exception as e: return pd.DataFrame(), "ERROR", []
 
 def cargar_metas():
     if os.path.exists("metas.xlsx"):
@@ -348,7 +358,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v2.8")
+st.title("🚀 Monitor Comercial ALROTEK v3.0")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -556,45 +566,56 @@ with tab_renta:
             ].copy()
             
             if not df_filtered.empty:
+                # KPIs CONTABLES
                 total_ventas = df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum()
                 total_mercaderia = df_filtered[df_filtered['Clasificacion'] == 'Costo Mercadería']['Monto_Neto'].sum()
                 total_wip = df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum()
                 total_horas_contable = df_filtered[df_filtered['Clasificacion'] == 'Costo Horas']['Monto_Neto'].sum()
                 
+                # DATOS EXTRA
                 ids_cuentas_analiticas = df_filtered['id_cuenta_analitica'].dropna().unique().tolist()
-                nombres_cuentas_analiticas = df_filtered['Cuenta_Analitica_Nombre'].unique().tolist() # Para búsqueda por nombre
+                nombres_cuentas_analiticas = df_filtered['Cuenta_Analitica_Nombre'].unique().tolist()
                 
-                # Cargar Extras
+                # Horas
                 df_horas_detalle = cargar_detalle_horas_estructura(ids_cuentas_analiticas)
                 
-                # --- AQUÍ LLAMAMOS A LA NUEVA FUNCIÓN V2 (TRIPLE CHECK) ---
-                df_stock_sitio = cargar_inventario_ubicacion_proyecto_v2(ids_cuentas_analiticas, nombres_cuentas_analiticas)
-                
+                # Inventario (Llamada V4)
+                df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuentas_analiticas)
                 total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
                 
+                # Feedback Bodegas
+                txt_bodegas = "Sin ubicación asignada"
+                if status_stock == "OK" or status_stock == "NO_STOCK":
+                    txt_bodegas = f"Ubicaciones: {', '.join(bodegas_encontradas)}"
+                elif status_stock == "NO_BODEGA":
+                    txt_bodegas = "⚠️ No se encontró bodega vinculada"
+                
+                # --- TARJETAS ---
                 k1, k2, k3, k4, k5 = st.columns(5)
                 with k1: card_kpi("Ventas", total_ventas, "bg-green")
                 with k2: card_kpi("Costo Mercadería", total_mercaderia, "bg-orange")
                 with k3: card_kpi("WIP", total_wip, "bg-yellow")
                 with k4: card_kpi("Costo Horas (Contable)", total_horas_contable, "bg-blue")
-                with k5: card_kpi("Inventario Sitio", total_stock_sitio, "bg-purple")
+                with k5: card_kpi("Inventario Sitio", total_stock_sitio, "bg-purple", nota=txt_bodegas)
                 
+                # --- SECCIONES DETALLE ---
                 c_horas, c_stock = st.columns(2)
                 with c_horas:
-                    st.markdown("##### 🕒 Desglose de Horas (Normal / Extra)")
+                    st.markdown("##### 🕒 Desglose de Horas")
                     if not df_horas_detalle.empty:
                         resumen_horas = df_horas_detalle.groupby('Tipo_Hora')[['Horas', 'Costo']].sum().reset_index()
                         st.dataframe(resumen_horas, column_config={"Costo": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
-                    else: st.caption("Sin registros de horas analíticas.")
+                    else: st.caption("Sin registros.")
                 
                 with c_stock:
-                    st.markdown("##### 📦 Inventario en Ubicación del Proyecto")
+                    st.markdown("##### 📦 Detalle Inventario")
                     if not df_stock_sitio.empty:
                         st.dataframe(df_stock_sitio[['Producto_Nombre', 'quantity', 'Valor_Total']], 
                                      column_config={"Valor_Total": st.column_config.NumberColumn(format="₡ %.2f")}, 
                                      hide_index=True, use_container_width=True)
-                    else: st.caption("Sin stock asignado a ubicación de proyecto.")
+                    else: st.caption(f"Estado: {status_stock}")
 
+                # 3. Tabla General
                 st.divider()
                 st.markdown("**Detalle Movimientos Contables**")
                 st.dataframe(
