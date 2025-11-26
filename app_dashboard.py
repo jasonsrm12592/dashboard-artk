@@ -99,6 +99,28 @@ def cargar_datos_generales():
         return df
     except Exception: return pd.DataFrame()
 
+@st.cache_data(ttl=900)
+def cargar_cartera():
+    try:
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        dominio = [['move_type', '=', 'out_invoice'], ['state', '=', 'posted'], ['payment_state', 'in', ['not_paid', 'partial']], ['amount_residual', '>', 0], ['company_id', '=', COMPANY_ID]]
+        ids = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'search', [dominio])
+        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'read', [ids], {'fields': ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'partner_id', 'invoice_user_id']})
+        df = pd.DataFrame(registros)
+        if not df.empty:
+            df['invoice_date'] = pd.to_datetime(df['invoice_date'])
+            df['invoice_date_due'] = pd.to_datetime(df['invoice_date_due'])
+            df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
+            df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
+            df['Dias_Vencido'] = (pd.Timestamp.now() - df['invoice_date_due']).dt.days
+            def bucket(d): return "Por Vencer" if d < 0 else ("0-30" if d<=30 else ("31-60" if d<=60 else ("61-90" if d<=90 else "+90")))
+            df['Antiguedad'] = df['Dias_Vencido'].apply(bucket)
+            df['Antiguedad'] = pd.Categorical(df['Antiguedad'], ["Por Vencer", "0-30", "31-60", "61-90", "+90"], ordered=True)
+        return df
+    except: return pd.DataFrame()
+
 @st.cache_data(ttl=3600)
 def cargar_datos_clientes_extendido(ids_clientes):
     try:
@@ -150,7 +172,6 @@ def cargar_inventario_general():
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         try: ids_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
         except: ids_kits = []
-        ids_templates_kit = [] # Simplificado para no alargar, lógica de kits opcional aquí
         
         dominio = [['active', '=', True]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
@@ -226,25 +247,20 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Buscamos en lineas analiticas que coincidan con las cuentas seleccionadas
         dominio = [
             ['account_id', 'in', ids_cuentas_analiticas],
-            ['date', '>=', f'{datetime.now().year}-01-01'] # Limitamos al año actual para rapidez
+            ['date', '>=', f'{datetime.now().year}-01-01']
         ]
-        
-        # Campos: Importante 'x_studio_tipo_horas_1'
         campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
         
         df = pd.DataFrame(registros)
         if not df.empty:
-            # Limpieza del campo studio
             def limpiar_tipo(val):
                 if not val: return "No Definido"
                 return str(val)
             df['Tipo_Hora'] = df['x_studio_tipo_horas_1'].apply(limpiar_tipo)
-            # El costo en analytic line suele ser negativo, lo volvemos positivo para mostrar "Gasto"
             df['Costo'] = df['amount'].abs()
             df['Horas'] = df['unit_amount']
             
@@ -253,25 +269,20 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
 
 @st.cache_data(ttl=900)
 def cargar_inventario_ubicacion_proyecto(ids_proyectos_analiticos):
-    """
-    Busca stock en ubicaciones vinculadas a un proyecto.
-    Asume que 'x_studio_field_qCgKk' en stock.location guarda el ID del Proyecto/Cuenta Analítica.
-    """
+    """Busca stock en ubicaciones vinculadas a un proyecto por Studio"""
     try:
         if not ids_proyectos_analiticos: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # 1. Buscar Ubicaciones que tengan estos IDs de proyecto en el campo Studio
-        # Nota: ids_proyectos_analiticos son enteros (IDs de cuenta analitica). 
-        # Odoo Studio a veces guarda Relaciones como ID entero o String. Probamos ID.
+        # 1. Buscar Ubicaciones con el campo x_studio_field_qCgKk
         dominio_loc = [['x_studio_field_qCgKk', 'in', ids_proyectos_analiticos], ['usage', '=', 'internal']]
         ids_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
         
         if not ids_locs: return pd.DataFrame()
         
-        # 2. Traer Quants de esas ubicaciones
+        # 2. Traer Quants
         dominio_quant = [['location_id', 'in', ids_locs]]
         campos_quant = ['product_id', 'quantity', 'location_id']
         ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
@@ -279,7 +290,7 @@ def cargar_inventario_ubicacion_proyecto(ids_proyectos_analiticos):
         
         df = pd.DataFrame(data_quants)
         if not df.empty:
-            # 3. Traer Costos de esos productos
+            # 3. Traer Costos
             ids_prods = [p[0] for p in df['product_id'] if p]
             ids_prods = list(set(ids_prods))
             costos = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'name']})
@@ -289,34 +300,23 @@ def cargar_inventario_ubicacion_proyecto(ids_proyectos_analiticos):
             df = pd.merge(df, df_costos, on='pid', how='left')
             
             df['Valor_Total'] = df['quantity'] * df['Costo_Unit']
-            df = df[df['quantity'] != 0] # Quitar ceros
+            df = df[df['quantity'] != 0]
             
         return df
     except Exception: return pd.DataFrame()
 
-def cargar_cartera():
-    try:
-        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
-        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
-        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        dominio = [['move_type', '=', 'out_invoice'], ['state', '=', 'posted'], ['payment_state', 'in', ['not_paid', 'partial']], ['amount_residual', '>', 0], ['company_id', '=', COMPANY_ID]]
-        ids = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'read', [ids], {'fields': ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'partner_id', 'invoice_user_id']})
-        df = pd.DataFrame(registros)
-        if not df.empty:
-            df['invoice_date'] = pd.to_datetime(df['invoice_date'])
-            df['invoice_date_due'] = pd.to_datetime(df['invoice_date_due'])
-            df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
-            df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
-            df['Dias_Vencido'] = (pd.Timestamp.now() - df['invoice_date_due']).dt.days
-            def bucket(d): return "Por Vencer" if d < 0 else ("0-30" if d<=30 else ("31-60" if d<=60 else ("61-90" if d<=90 else "+90")))
-            df['Antiguedad'] = df['Dias_Vencido'].apply(bucket)
-            df['Antiguedad'] = pd.Categorical(df['Antiguedad'], ["Por Vencer", "0-30", "31-60", "61-90", "+90"], ordered=True)
+# --- FUNCIÓN QUE FALTABA ---
+def cargar_metas():
+    if os.path.exists("metas.xlsx"):
+        df = pd.read_excel("metas.xlsx")
+        df['Mes'] = pd.to_datetime(df['Mes'])
+        df['Mes_Num'] = df['Mes'].dt.month
+        df['Anio'] = df['Mes'].dt.year
         return df
-    except: return pd.DataFrame()
+    return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v2.5")
+st.title("🚀 Monitor Comercial ALROTEK v2.5.1")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
