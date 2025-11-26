@@ -275,13 +275,12 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-# *** AQUÍ ESTÁ EL CAMBIO PARA VERIFICAR: "v2.0" ***
-st.title("🚀 Monitor Comercial ALROTEK v2.0")
+st.title("🚀 Monitor Comercial ALROTEK v2.2")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
     "📦 Productos", 
-    "📈 Rentabilidad P&L", 
+    "📈 Rentabilidad (Audit)", 
     "🧟 Inventario", 
     "💰 Cartera",
     "👥 Segmentación",
@@ -340,12 +339,10 @@ with tab_kpis:
 
         c_graf, c_vend = st.columns([2, 1])
         with c_graf:
-            # --- NUEVA LÓGICA DE ANALÍTICA ---
             st.subheader("📊 Ventas por Plan Analítico")
             if not df_prod.empty:
                 df_lineas = df_prod[df_prod['date'].dt.year == anio_sel].copy()
                 
-                # Mapeo: ID Cuenta -> Nombre Plan
                 mapa_planes = {}
                 if not df_analitica.empty:
                     mapa_planes = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre']))
@@ -363,14 +360,12 @@ with tab_kpis:
 
                 df_lineas['Plan_Agrupado'] = df_lineas['analytic_distribution'].apply(clasificar_plan_estricto)
                 
-                # 1. Gráfico de Pastel (Total)
                 ventas_linea = df_lineas.groupby('Plan_Agrupado')['Venta_Neta'].sum().reset_index()
                 fig_pie = px.pie(ventas_linea, values='Venta_Neta', names='Plan_Agrupado', hole=0.4, 
                                  color_discrete_sequence=px.colors.qualitative.Prism)
                 fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=300)
                 st.plotly_chart(fig_pie, use_container_width=True)
                 
-                # 2. Gráfico de Barras Apiladas por Mes (CORREGIDO CON TOTALES)
                 st.subheader("📅 Evolución Mensual por Plan")
                 df_lineas['Mes_Nombre'] = df_lineas['date'].dt.strftime('%m-%b')
                 df_lineas['Mes_Num'] = df_lineas['date'].dt.month
@@ -378,7 +373,6 @@ with tab_kpis:
                 ventas_mes_plan = df_lineas.groupby(['Mes_Num', 'Mes_Nombre', 'Plan_Agrupado'])['Venta_Neta'].sum().reset_index()
                 ventas_mes_plan = ventas_mes_plan.sort_values('Mes_Num')
                 
-                # Cálculo de Totales para Etiquetas
                 total_por_mes = df_lineas.groupby(['Mes_Num', 'Mes_Nombre'])['Venta_Neta'].sum().reset_index().sort_values('Mes_Num')
                 total_por_mes['Label'] = total_por_mes['Venta_Neta'].apply(lambda x: f"₡{x/1e6:.1f}M")
                 
@@ -386,7 +380,6 @@ with tab_kpis:
                                    title="Mix de Ventas Mensual",
                                    color_discrete_sequence=px.colors.qualitative.Prism)
                 
-                # Agregar etiquetas de total encima
                 fig_stack.add_trace(go.Scatter(
                     x=total_por_mes['Mes_Nombre'], 
                     y=total_por_mes['Venta_Neta'],
@@ -405,7 +398,6 @@ with tab_kpis:
 
             st.divider()
 
-            # GRÁFICO META Y COMPARATIVO GLOBAL (CORREGIDO COLORES SEMÁFORO)
             v_mes_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
             v_mes_act.columns = ['Mes_Num', 'Venta_Actual']
             v_mes_ant = df_ant_data.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
@@ -419,12 +411,11 @@ with tab_kpis:
             nombres_meses = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
             df_chart['Mes_Nombre'] = df_chart['Mes_Num'].map(nombres_meses)
 
-            # Lógica de colores Semáforo
             def get_color(real, meta):
-                if meta == 0: return '#2980b9' # Azul si no hay meta
-                if real > meta: return '#27ae60' # Verde
-                if real < meta: return '#c0392b' # Rojo
-                return '#f1c40f' # Amarillo
+                if meta == 0: return '#2980b9'
+                if real > meta: return '#27ae60'
+                if real < meta: return '#c0392b'
+                return '#f1c40f'
             
             colores_meta = [get_color(r, m) for r, m in zip(df_chart['Venta_Actual'], df_chart['Meta'])]
 
@@ -502,66 +493,71 @@ with tab_prod:
             fig_bar.update_layout(height=350, xaxis_title=metrica_prod, yaxis_title="")
             st.plotly_chart(fig_bar, use_container_width=True)
 
-# === PESTAÑA 3: RENTABILIDAD P&L ===
+# === PESTAÑA 3: RENTABILIDAD P&L (MODO AUDITORÍA) ===
 with tab_renta:
     anio_r_sel = st.selectbox("Año Financiero", anios, key="renta_anio")
-    with st.spinner('Cargando datos contables...'):
+    
+    with st.spinner('Cargando datos contables para auditoría...'):
         df_pnl = cargar_pnl_contable(anio_r_sel)
     
     if not df_pnl.empty:
+        # 1. Asignar nombres de Planes y Cuentas
         if not df_analitica.empty:
             mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Plan_Nombre']))
-            df_pnl['Plan_Negocio'] = df_pnl['id_cuenta_analitica'].map(mapa_cuentas).fillna("Sin Plan")
-        else:
-            df_pnl['Plan_Negocio'] = "Sin Analítica"
-
-        def asignar_linea(row):
-            plan = row['Plan_Negocio']
-            clasif = row['Clasificacion']
-            if clasif == 'Venta' and plan == 'Sin Plan': return 'Retail'
-            if clasif == 'Costo Retail': return 'Retail'
-            if plan != 'Sin Plan': return plan
-            return 'Otros'
-
-        df_pnl['Linea_Negocio'] = df_pnl.apply(asignar_linea, axis=1)
-        df_fin = df_pnl[df_pnl['Clasificacion'].isin(['Venta', 'Costo Retail', 'Costo Proyecto'])]
-        resumen = df_fin.groupby(['Linea_Negocio', 'Clasificacion'])['Monto_Neto'].sum().unstack(fill_value=0)
-        
-        if 'Venta' not in resumen.columns: resumen['Venta'] = 0
-        if 'Costo Retail' not in resumen.columns: resumen['Costo Retail'] = 0
-        if 'Costo Proyecto' not in resumen.columns: resumen['Costo Proyecto'] = 0
-        
-        resumen['Costo_Total'] = (resumen['Costo Retail'] + resumen['Costo Proyecto']).abs()
-        resumen['Margen_Bruto'] = resumen['Venta'] - resumen['Costo_Total']
-        resumen['Margen %'] = (resumen['Margen_Bruto'] / resumen['Venta'] * 100).fillna(0)
-        resumen = resumen.sort_values('Venta', ascending=False)
-
-        st.subheader("📈 Estado de Resultados por Línea")
-        c_r1, c_r2 = st.columns([2, 1])
-        with c_r1:
-            fig_mix = go.Figure()
-            fig_mix.add_trace(go.Bar(x=resumen.index, y=resumen['Venta'], name='Venta', marker_color='#2980b9'))
-            fig_mix.add_trace(go.Bar(x=resumen.index, y=resumen['Costo_Total'], name='Costo', marker_color='#e74c3c'))
-            fig_mix.add_trace(go.Bar(x=resumen.index, y=resumen['Margen_Bruto'], name='Utilidad', marker_color='#27ae60'))
-            fig_mix.update_layout(barmode='group', height=400)
-            st.plotly_chart(fig_mix, use_container_width=True)
-        with c_r2:
-            fig_m = px.bar(resumen, x='Margen %', y=resumen.index, orientation='h', text_auto='.1f', color='Margen %', color_continuous_scale='RdYlGn')
-            st.plotly_chart(fig_m, use_container_width=True)
+            mapa_nombres_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Cuenta_Nombre']))
             
-        st.divider()
-        
-        col_down_r, _ = st.columns([1, 4])
-        with col_down_r:
-            excel_renta = convert_df_to_excel(df_pnl)
-            st.download_button("📥 Descargar Detalle Financiero", data=excel_renta, file_name=f"Rentabilidad_{anio_r_sel}.xlsx")
+            df_pnl['Plan_Negocio'] = df_pnl['id_cuenta_analitica'].map(mapa_cuentas).fillna("Sin Plan Asignado")
+            df_pnl['Cuenta_Analitica_Nombre'] = df_pnl['id_cuenta_analitica'].map(mapa_nombres_cuentas).fillna("-")
+        else:
+            df_pnl['Plan_Negocio'] = "Sin Estructura Analítica"
+            df_pnl['Cuenta_Analitica_Nombre'] = "-"
 
-        df_wip = df_pnl[df_pnl['Clasificacion'] == 'WIP']
-        if not df_wip.empty:
-            total_wip = df_wip['Monto_Neto'].sum()
-            st.metric("Saldo en WIP", f"₡ {total_wip:,.0f}")
-            st.bar_chart(df_wip.groupby('Linea_Negocio')['Monto_Neto'].sum().sort_values(ascending=False))
-        else: st.info("Sin saldo en WIP.")
+        # 2. FILTROS INTERACTIVOS EN CASCADA
+        st.subheader("🕵️ Buscador por Plan y Cuenta Analítica")
+        
+        c_filt1, c_filt2 = st.columns(2)
+        with c_filt1:
+            lista_planes = sorted(df_pnl['Plan_Negocio'].unique().astype(str))
+            planes_sel = st.multiselect("1. Selecciona Planes:", lista_planes, default=lista_planes)
+        
+        # Filtramos primero por plan para mostrar solo las cuentas relevantes en el segundo filtro
+        df_temp_planes = df_pnl[df_pnl['Plan_Negocio'].isin(planes_sel)]
+        
+        with c_filt2:
+            lista_cuentas = sorted(df_temp_planes['Cuenta_Analitica_Nombre'].unique().astype(str))
+            cuentas_sel = st.multiselect("2. Selecciona Cuentas Analíticas:", lista_cuentas, default=lista_cuentas)
+        
+        # 3. Filtrado Final (Plan AND Cuenta)
+        df_filtered = df_pnl[
+            (df_pnl['Plan_Negocio'].isin(planes_sel)) & 
+            (df_pnl['Cuenta_Analitica_Nombre'].isin(cuentas_sel))
+        ].copy()
+        
+        # 4. Cálculos Rápidos sobre la selección
+        if not df_filtered.empty:
+            total_venta_sel = df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum()
+            total_costo_sel = df_filtered[df_filtered['Clasificacion'].str.contains("Costo")]['Monto_Neto'].sum()
+            margen_sel = total_venta_sel - abs(total_costo_sel)
+            
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Total Ingresos (Selección)", f"₡ {total_venta_sel:,.0f}")
+            k2.metric("Total Costos (Selección)", f"₡ {total_costo_sel:,.0f}")
+            k3.metric("Margen Bruto", f"₡ {margen_sel:,.0f}")
+        
+        # 5. Tabla Detallada
+        st.divider()
+        st.markdown("**Detalle de Movimientos Contables**")
+        
+        tabla_show = df_filtered[['date', 'name', 'Plan_Negocio', 'Cuenta_Analitica_Nombre', 'Clasificacion', 'Monto_Neto']].sort_values('date', ascending=False)
+        tabla_show.columns = ['Fecha', 'Descripción / Etiqueta', 'Plan Analítico', 'Cuenta Analítica', 'Tipo', 'Monto']
+        
+        st.dataframe(tabla_show.style.format({'Monto': '₡ {:,.2f}'}), use_container_width=True)
+        
+        excel_audit = convert_df_to_excel(df_filtered)
+        st.download_button("📥 Descargar Auditoría (Excel)", data=excel_audit, file_name=f"Auditoria_Rentabilidad_{anio_r_sel}.xlsx")
+        
+    else:
+        st.warning("No hay movimientos contables en los IDs configurados para este año.")
 
 # === PESTAÑA 4: INVENTARIO ===
 with tab_inv:
