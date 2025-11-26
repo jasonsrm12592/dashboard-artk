@@ -211,29 +211,41 @@ def cargar_inventario():
 
 @st.cache_data(ttl=3600)
 def cargar_estructura_analitica():
-    """Descarga PLANES y CUENTAS"""
+    """Descarga RELACIÓN: CUENTA ANALÍTICA -> PLAN ANALÍTICO"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        dominio_todo = ['|', ['active', '=', True], ['active', '=', False]]
-        
-        ids_plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'search', [dominio_todo])
+        # 1. Traemos los PLANES (Ej: Proyectos, Mantenimientos, etc.)
+        ids_plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'search', [[['id', '!=', 0]]])
         plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'read', [ids_plans], {'fields': ['name']})
         df_plans = pd.DataFrame(plans).rename(columns={'id': 'plan_id', 'name': 'Plan_Nombre'})
         
-        ids_acc = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'search', [dominio_todo])
+        # 2. Traemos las CUENTAS y su respectivo PLAN_ID
+        ids_acc = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'search', [[['active', 'in', [True, False]]]])
+        # Nota: En Odoo 16+ el campo es 'plan_id', en versiones anteriores puede ser 'group_id'
         accounts = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'read', [ids_acc], {'fields': ['name', 'plan_id']})
         df_acc = pd.DataFrame(accounts)
         
         if not df_acc.empty and not df_plans.empty:
-            df_acc['plan_id'] = df_acc['plan_id'].apply(lambda x: x[0] if x else 0)
+            # Limpieza: plan_id viene como tupla (id, nombre) o False
+            df_acc['plan_id'] = df_acc['plan_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else (x if x else 0))
+            
+            # Cruzamos Cuentas con Planes
             df_full = pd.merge(df_acc, df_plans, on='plan_id', how='left')
             df_full.rename(columns={'id': 'id_cuenta_analitica', 'name': 'Cuenta_Nombre'}, inplace=True)
-            return df_full
+            
+            # Rellenar planes vacíos
+            df_full['Plan_Nombre'] = df_full['Plan_Nombre'].fillna("Sin Plan Asignado")
+            
+            # Retornamos solo lo vital: ID de la cuenta y Nombre del Plan al que pertenece
+            return df_full[['id_cuenta_analitica', 'Cuenta_Nombre', 'Plan_Nombre']]
+            
         return pd.DataFrame()
-    except Exception: return pd.DataFrame()
+    except Exception as e:
+        # st.error(f"Error cargando analítica: {e}") # Descomentar para debug
+        return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def cargar_pnl_contable(anio):
@@ -778,3 +790,4 @@ with tab_det:
                         df_hist = df_prod_cli.groupby(['date', 'Producto'])[['quantity', 'Venta_Neta']].sum().reset_index().sort_values('date', ascending=False)
                         st.download_button("📥 Descargar Historial", data=convert_df_to_excel(df_hist), file_name=f"Historial_{cliente_sel}.xlsx")
                     else: st.info("No hay detalle de productos.")
+
