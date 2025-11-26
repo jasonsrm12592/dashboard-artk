@@ -121,7 +121,6 @@ def cargar_detalle_productos():
             ['display_type', '=', 'product'],
             ['move_id.move_type', 'in', ['out_invoice', 'out_refund']]
         ]
-        # Traemos 'analytic_distribution'
         campos = ['date', 'product_id', 'credit', 'debit', 'quantity', 'name', 'move_id', 'analytic_distribution']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': campos})
@@ -186,39 +185,6 @@ def cargar_estructura_analitica():
         return pd.DataFrame()
     except Exception: return pd.DataFrame()
 
-@st.cache_data(ttl=3600)
-def cargar_pnl_contable(anio):
-    """Descarga P&L REAL"""
-    try:
-        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
-        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
-        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        dominio_pnl = [['account_id', 'in', TODOS_LOS_IDS], ['date', '>=', f'{anio}-01-01'], ['date', '<=', f'{anio}-12-31'], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted']]
-        campos = ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']
-        ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': campos})
-        df = pd.DataFrame(registros)
-        if not df.empty:
-            df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
-            df['Monto_Neto'] = df['credit'] - df['debit']
-            def clasificar(row):
-                id_acc = row['ID_Cuenta']
-                if id_acc in IDS_INGRESOS: return "Venta"
-                if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
-                if id_acc in IDS_COSTO_PROY: return "Costo Proyecto"
-                if id_acc == ID_WIP: return "WIP"
-                return "Otro"
-            df['Clasificacion'] = df.apply(clasificar, axis=1)
-            def get_analytic_id(dist):
-                if not dist: return None
-                try: 
-                    if isinstance(dist, dict): return int(list(dist.keys())[0])
-                except: pass
-                return None
-            df['id_cuenta_analitica'] = df['analytic_distribution'].apply(get_analytic_id)
-        return df
-    except Exception: return pd.DataFrame()
-
 def cargar_metas():
     if os.path.exists("metas.xlsx"):
         df = pd.read_excel("metas.xlsx")
@@ -231,10 +197,9 @@ def cargar_metas():
 # --- 5. INTERFAZ ---
 st.title("🚀 Monitor Comercial ALROTEK")
 
-tab_kpis, tab_prod, tab_renta, tab_inv, tab_cli, tab_vend, tab_det = st.tabs([
+tab_kpis, tab_prod, tab_inv, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
     "📦 Productos", 
-    "📈 Rentabilidad P&L", 
     "🧟 Inventario", 
     "👥 Segmentación",
     "💼 Vendedores",
@@ -290,77 +255,88 @@ with tab_kpis:
             excel_data = convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Provincia', 'Vendedor', 'Venta_Neta']])
             st.download_button("📥 Descargar Detalle Facturas", data=excel_data, file_name=f"Ventas_{anio_sel}.xlsx")
 
-        # --- SECCIÓN GRÁFICOS SEPARADOS ---
-        col_g1, col_g2 = st.columns(2)
-        
-        # PREPARACIÓN DE DATOS
-        v_mes_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
-        v_mes_act.columns = ['Mes_Num', 'Venta_Actual']
-        v_mes_ant = df_ant_data.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
-        v_mes_ant.columns = ['Mes_Num', 'Venta_Anterior']
-        v_metas = metas_filtradas.groupby('Mes_Num')['Meta'].sum().reset_index()
-        
-        df_chart = pd.DataFrame({'Mes_Num': range(1, 13)})
-        df_chart = pd.merge(df_chart, v_mes_ant, on='Mes_Num', how='left').fillna(0)
-        df_chart = pd.merge(df_chart, v_mes_act, on='Mes_Num', how='left').fillna(0)
-        df_chart = pd.merge(df_chart, v_metas, on='Mes_Num', how='left').fillna(0)
-        nombres_meses = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
-        df_chart['Mes_Nombre'] = df_chart['Mes_Num'].map(nombres_meses)
-
-        # GRÁFICO 1: DESEMPEÑO ACTUAL VS META
-        with col_g1:
-            st.subheader(f"🎯 Desempeño {anio_sel} vs Meta")
-            colores = ['#27ae60' if r >= m else '#c0392b' for r, m in zip(df_chart['Venta_Actual'], df_chart['Meta'])]
-            fig1 = go.Figure()
-            fig1.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'], name='Venta Real', marker_color=colores, text=df_chart['Venta_Actual'].apply(lambda x: f'{x/1e6:.0f}' if x > 0 else ''), textposition='auto'))
-            fig1.add_trace(go.Scatter(x=df_chart['Mes_Nombre'], y=df_chart['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
-            fig1.update_layout(template="plotly_white", height=400, legend=dict(orientation="h", y=1.1))
-            st.plotly_chart(fig1, use_container_width=True)
-
-        # GRÁFICO 2: COMPARATIVO YOY (SIN META)
-        with col_g2:
-            st.subheader(f"📅 Comparativo {anio_sel} vs {anio_ant}")
-            fig2 = go.Figure()
-            fig2.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Anterior'], name=f'{anio_ant}', marker_color='#95a5a6', opacity=0.6))
-            fig2.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'], name=f'{anio_sel}', marker_color='#2980b9', text=df_chart['Venta_Actual'].apply(lambda x: f'{x/1e6:.0f}' if x > 0 else ''), textposition='auto'))
-            fig2.update_layout(template="plotly_white", height=400, legend=dict(orientation="h", y=1.1), barmode='group')
-            st.plotly_chart(fig2, use_container_width=True)
-            
-        st.divider()
-
-        # --- NUEVO GRÁFICO: VENTAS POR LÍNEA DE NEGOCIO ---
-        c_linea, c_vend = st.columns([1, 1])
+        # --- NUEVO: GRÁFICO LÍNEAS DE NEGOCIO (A prueba de fallos) ---
+        c_linea, c_graf = st.columns([1, 2])
         
         with c_linea:
-            st.subheader("📊 Ventas por Línea de Negocio")
-            if not df_prod.empty and not df_analitica.empty:
+            st.subheader("📊 Líneas de Negocio")
+            if not df_prod.empty:
                 df_lineas = df_prod[df_prod['date'].dt.year == anio_sel].copy()
-                mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre']))
+                
+                # Crear mapa seguro (si df_analitica está vacía, mapa es vacío)
+                mapa_cuentas = {}
+                if not df_analitica.empty:
+                    mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre']))
                 
                 def clasificar_linea(dist):
                     if not dist: return "Retail / Mostrador"
                     try:
-                        if isinstance(dist, dict):
-                            for k in dist.keys():
-                                plan = mapa_cuentas.get(str(k))
-                                if plan: return plan
-                    except: pass
+                        # Manejo robusto de formato Odoo
+                        d = dist if isinstance(dist, dict) else eval(str(dist))
+                        if not d: return "Retail / Mostrador"
+                        
+                        for k in d.keys():
+                            # Buscamos nombre, si no hay mapa devolverse "Proyecto (ID)"
+                            nombre = mapa_cuentas.get(str(k))
+                            if nombre: return nombre
+                            return f"Proyecto ID {k}"
+                    except: 
+                        pass
                     return "Retail / Mostrador"
 
                 df_lineas['Linea_Negocio'] = df_lineas['analytic_distribution'].apply(clasificar_linea)
                 ventas_linea = df_lineas.groupby('Linea_Negocio')['Venta_Neta'].sum().reset_index()
                 
                 fig_pie = px.pie(ventas_linea, values='Venta_Neta', names='Linea_Negocio', hole=0.4, 
-                                 color_discrete_sequence=px.colors.qualitative.Bold)
+                                 color_discrete_sequence=px.colors.qualitative.Prism)
+                fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=350)
                 st.plotly_chart(fig_pie, use_container_width=True)
                 
-                with st.expander("Ver Detalle Montos"):
+                # Pequeña tabla resumen expandible
+                with st.expander("Ver Montos por Línea"):
                     st.dataframe(ventas_linea.sort_values('Venta_Neta', ascending=False).style.format({'Venta_Neta': '₡ {:,.0f}'}), use_container_width=True)
             else:
-                st.info("Cargando datos de líneas...")
+                st.info("Sin datos de productos para clasificar.")
 
+        with c_graf:
+            # Preparar datos gráficos
+            v_mes_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
+            v_mes_act.columns = ['Mes_Num', 'Venta_Actual']
+            v_mes_ant = df_ant_data.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
+            v_mes_ant.columns = ['Mes_Num', 'Venta_Anterior']
+            v_metas = metas_filtradas.groupby('Mes_Num')['Meta'].sum().reset_index()
+            
+            df_chart = pd.DataFrame({'Mes_Num': range(1, 13)})
+            df_chart = pd.merge(df_chart, v_mes_ant, on='Mes_Num', how='left').fillna(0)
+            df_chart = pd.merge(df_chart, v_mes_act, on='Mes_Num', how='left').fillna(0)
+            df_chart = pd.merge(df_chart, v_metas, on='Mes_Num', how='left').fillna(0)
+            
+            nombres_meses = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
+            df_chart['Mes_Nombre'] = df_chart['Mes_Num'].map(nombres_meses)
+
+            # GRÁFICO 1: META
+            st.subheader(f"🎯 Desempeño vs Meta")
+            colores = ['#27ae60' if r >= m else '#c0392b' for r, m in zip(df_chart['Venta_Actual'], df_chart['Meta'])]
+            fig1 = go.Figure()
+            fig1.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'], name='Venta', marker_color=colores))
+            fig1.add_trace(go.Scatter(x=df_chart['Mes_Nombre'], y=df_chart['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
+            fig1.update_layout(template="plotly_white", height=350, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.1))
+            st.plotly_chart(fig1, use_container_width=True)
+
+        st.divider()
+
+        # GRÁFICO 2: COMPARATIVO (ABAJO)
+        c_comp, c_vend = st.columns([2, 1])
+        with c_comp:
+            st.subheader(f"📅 Comparativo Histórico ({anio_sel} vs {anio_ant})")
+            fig2 = go.Figure()
+            fig2.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Anterior'], name=f'{anio_ant}', marker_color='#95a5a6', opacity=0.6))
+            fig2.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'], name=f'{anio_sel}', marker_color='#2980b9', text=df_chart['Venta_Actual'].apply(lambda x: f'{x/1e6:.0f}' if x > 0 else ''), textposition='auto'))
+            fig2.update_layout(template="plotly_white", height=400, legend=dict(orientation="h", y=1.1), barmode='group')
+            st.plotly_chart(fig2, use_container_width=True)
+            
         with c_vend:
-            st.subheader("🏆 Top Vendedores (vs Año Ant.)")
+            st.subheader("🏆 Top Vendedores")
             rank_actual = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index()
             rank_actual.columns = ['Vendedor', 'Venta_Actual']
             rank_anterior = df_ant_data.groupby('Vendedor')['Venta_Neta'].sum().reset_index()
@@ -426,69 +402,7 @@ with tab_prod:
             fig_bar.update_layout(height=350, xaxis_title=metrica_prod, yaxis_title="")
             st.plotly_chart(fig_bar, use_container_width=True)
 
-# === PESTAÑA 3: RENTABILIDAD P&L ===
-with tab_renta:
-    anio_r_sel = st.selectbox("Año Financiero", anios, key="renta_anio")
-    with st.spinner('Cargando datos contables...'):
-        df_pnl = cargar_pnl_contable(anio_r_sel)
-    
-    if not df_pnl.empty:
-        if not df_analitica.empty:
-            mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Plan_Nombre']))
-            df_pnl['Plan_Negocio'] = df_pnl['id_cuenta_analitica'].map(mapa_cuentas).fillna("Sin Plan")
-        else:
-            df_pnl['Plan_Negocio'] = "Sin Analítica"
-
-        def asignar_linea(row):
-            plan = row['Plan_Negocio']
-            clasif = row['Clasificacion']
-            if clasif == 'Venta' and plan == 'Sin Plan': return 'Retail'
-            if clasif == 'Costo Retail': return 'Retail'
-            if plan != 'Sin Plan': return plan
-            return 'Otros'
-
-        df_pnl['Linea_Negocio'] = df_pnl.apply(asignar_linea, axis=1)
-        df_fin = df_pnl[df_pnl['Clasificacion'].isin(['Venta', 'Costo Retail', 'Costo Proyecto'])]
-        resumen = df_fin.groupby(['Linea_Negocio', 'Clasificacion'])['Monto_Neto'].sum().unstack(fill_value=0)
-        
-        if 'Venta' not in resumen.columns: resumen['Venta'] = 0
-        if 'Costo Retail' not in resumen.columns: resumen['Costo Retail'] = 0
-        if 'Costo Proyecto' not in resumen.columns: resumen['Costo Proyecto'] = 0
-        
-        resumen['Costo_Total'] = (resumen['Costo Retail'] + resumen['Costo Proyecto']).abs()
-        resumen['Margen_Bruto'] = resumen['Venta'] - resumen['Costo_Total']
-        resumen['Margen %'] = (resumen['Margen_Bruto'] / resumen['Venta'] * 100).fillna(0)
-        resumen = resumen.sort_values('Venta', ascending=False)
-
-        st.subheader("📈 Estado de Resultados por Línea")
-        c_r1, c_r2 = st.columns([2, 1])
-        with c_r1:
-            fig_mix = go.Figure()
-            fig_mix.add_trace(go.Bar(x=resumen.index, y=resumen['Venta'], name='Venta', marker_color='#2980b9'))
-            fig_mix.add_trace(go.Bar(x=resumen.index, y=resumen['Costo_Total'], name='Costo', marker_color='#e74c3c'))
-            fig_mix.add_trace(go.Bar(x=resumen.index, y=resumen['Margen_Bruto'], name='Utilidad', marker_color='#27ae60'))
-            fig_mix.update_layout(barmode='group', height=400)
-            st.plotly_chart(fig_mix, use_container_width=True)
-        with c_r2:
-            fig_m = px.bar(resumen, x='Margen %', y=resumen.index, orientation='h', text_auto='.1f', color='Margen %', color_continuous_scale='RdYlGn')
-            st.plotly_chart(fig_m, use_container_width=True)
-            
-        st.divider()
-        
-        # Botón Descarga P&L
-        col_down_r, _ = st.columns([1, 4])
-        with col_down_r:
-            excel_renta = convert_df_to_excel(df_pnl)
-            st.download_button("📥 Descargar Detalle Financiero", data=excel_renta, file_name=f"Rentabilidad_{anio_r_sel}.xlsx")
-
-        df_wip = df_pnl[df_pnl['Clasificacion'] == 'WIP']
-        if not df_wip.empty:
-            total_wip = df_wip['Monto_Neto'].sum()
-            st.metric("Saldo en WIP", f"₡ {total_wip:,.0f}")
-            st.bar_chart(df_wip.groupby('Linea_Negocio')['Monto_Neto'].sum().sort_values(ascending=False))
-        else: st.info("Sin saldo en WIP.")
-
-# === PESTAÑA 4: INVENTARIO ===
+# === PESTAÑA 3: INVENTARIO ===
 with tab_inv:
     if not df_cat.empty:
         st.subheader("⚠️ Detección de Baja Rotación (Productos Hueso)")
@@ -518,7 +432,7 @@ with tab_inv:
             use_container_width=True
         )
 
-# === PESTAÑA 5: SEGMENTACIÓN CLIENTES ===
+# === PESTAÑA 4: SEGMENTACIÓN CLIENTES ===
 with tab_cli:
     if not df_main.empty:
         st.subheader("🌍 Distribución de Ventas")
@@ -594,7 +508,7 @@ with tab_cli:
                 st.plotly_chart(fig_lost, use_container_width=True)
             else: st.success("Retención del 100%.")
 
-# === PESTAÑA 6: VENDEDORES ===
+# === PESTAÑA 5: VENDEDORES ===
 with tab_vend:
     if not df_main.empty:
         st.header("💼 Análisis de Desempeño Individual")
@@ -609,7 +523,6 @@ with tab_vend:
         venta_ind = df_v_anio['Venta_Neta'].sum()
         facturas_ind = df_v_anio['name'].nunique()
         ticket_ind = (venta_ind / facturas_ind) if facturas_ind > 0 else 0
-        
         cli_v_antes = set(df_v_ant[df_v_ant['Venta_Neta'] > 0]['Cliente'])
         cli_v_ahora = set(df_v_anio[df_v_anio['Venta_Neta'] > 0]['Cliente'])
         perdidos_v = list(cli_v_antes - cli_v_ahora)
@@ -621,19 +534,16 @@ with tab_vend:
         kv4.metric("Clientes en Riesgo", len(perdidos_v), delta=-len(perdidos_v), delta_color="inverse")
         
         st.divider()
-        
         col_dv1, col_dv2 = st.columns(2)
         with col_dv1:
             excel_vend = convert_df_to_excel(df_v_anio[['invoice_date', 'name', 'Cliente', 'Venta_Neta']])
             st.download_button(f"📥 Descargar Ventas {vendedor_sel}", data=excel_vend, file_name=f"Ventas_{vendedor_sel}_{anio_v_sel}.xlsx")
-            
         with col_dv2:
             if perdidos_v:
                 df_llamadas = df_v_ant[df_v_ant['Cliente'].isin(perdidos_v)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
                 st.download_button(f"📞 Descargar Lista Recuperación", data=convert_df_to_excel(df_llamadas), file_name=f"Recuperar_{vendedor_sel}.xlsx")
 
         st.divider()
-        
         col_v_top, col_v_lost = st.columns(2)
         with col_v_top:
             st.subheader(f"🌟 Mejores Clientes")
@@ -652,7 +562,7 @@ with tab_vend:
                 st.plotly_chart(fig_vl, use_container_width=True)
             else: st.success(f"Excelente retención.")
 
-# === PESTAÑA 7: RADIOGRAFÍA CLIENTE ===
+# === PESTAÑA 6: RADIOGRAFÍA CLIENTE ===
 with tab_det:
     if not df_main.empty:
         st.header("🔍 Radiografía Individual")
@@ -664,10 +574,11 @@ with tab_det:
             dias_sin = (datetime.now() - ultima_compra).days
             provincia = df_cli.iloc[0]['Provincia'] if 'Provincia' in df_cli.columns else "N/A"
             
-            kc1, kc2, kc3 = st.columns(3)
+            kc1, kc2, kc3, kc4 = st.columns(4)
             kc1.metric("Compras Históricas", f"₡ {total_comprado/1e6:,.1f} M")
             kc2.metric("Última Compra", ultima_compra.strftime('%d-%m-%Y'))
-            kc3.metric("Ubicación", provincia)
+            kc3.metric("Días sin Comprar", dias_sin, delta=-dias_sin, delta_color="inverse")
+            kc4.metric("Ubicación", provincia)
             
             st.divider()
             c_hist, c_prod = st.columns([1, 1])
@@ -681,7 +592,6 @@ with tab_det:
                     ids_facturas = df_cli['id'].tolist() if 'id' in df_cli.columns else [] 
                     if not ids_facturas: 
                         nombres_fact = set(df_cli['name'].unique())
-                    
                     ids_cli = set(df_cli['id'])
                     df_prod_cli = df_prod[df_prod['ID_Factura'].isin(ids_cli)]
                     
