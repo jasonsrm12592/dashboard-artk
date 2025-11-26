@@ -245,8 +245,7 @@ def cargar_pnl_contable(anio):
 @st.cache_data(ttl=900)
 def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
     """
-    Carga y CALCULA el costo ajustado de horas segun el tipo.
-    Multiplicadores: Doble (x3), Extra (x1.5), Normal (x1).
+    Carga horas filtrando basura (Materiales/Facturas)
     """
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
@@ -257,8 +256,15 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
         
-        # Solo filtramos por cuenta y fecha (este año) para rapidez
-        dominio = [['account_id', 'in', ids_clean], ['date', '>=', f'{datetime.now().year}-01-01']]
+        # FILTRO CRÍTICO: employee_id != False (Para traer solo horas reales)
+        # FILTRO EXTRA: x_studio_tipo_horas_1 != False (Para que no salga 'No Definido')
+        dominio = [
+            ['account_id', 'in', ids_clean],
+            ['date', '>=', f'{datetime.now().year}-01-01'],
+            ['employee_id', '!=', False], 
+            ['x_studio_tipo_horas_1', '!=', False] 
+        ]
+        
         campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
@@ -271,7 +277,7 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
             
             df['Tipo_Hora'] = df['x_studio_tipo_horas_1'].apply(limpiar_tipo)
             
-            # LÓGICA DE MULTIPLICADORES SOLICITADA
+            # LÓGICA DE MULTIPLICADORES
             def get_multiplier(tipo):
                 t = tipo.lower()
                 if "doble" in t: return 3.0
@@ -279,10 +285,8 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
                 return 1.0
             
             df['Multiplicador'] = df['Tipo_Hora'].apply(get_multiplier)
-            
-            # Calculo final
             df['Costo_Base'] = df['amount'].abs()
-            df['Costo'] = df['Costo_Base'] * df['Multiplicador'] # Costo Ajustado
+            df['Costo'] = df['Costo_Base'] * df['Multiplicador']
             df['Horas'] = df['unit_amount']
             
         return df
@@ -373,7 +377,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v3.2")
+st.title("🚀 Monitor Comercial ALROTEK v3.3")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
