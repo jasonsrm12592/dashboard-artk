@@ -33,6 +33,7 @@ except Exception:
 
 # --- 3. FUNCIONES UTILITARIAS ---
 def convert_df_to_excel(df):
+    """Convierte DataFrame a Excel en memoria"""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Datos')
@@ -56,6 +57,7 @@ def cargar_datos_generales():
             ['company_id', '=', COMPANY_ID]
         ]
         
+        # Traemos 'id' explícitamente (aunque read lo trae por defecto)
         campos = ['name', 'invoice_date', 'amount_untaxed_signed', 'partner_id', 'invoice_user_id']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'read', [ids], {'fields': campos})
@@ -66,8 +68,9 @@ def cargar_datos_generales():
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
             df['Mes'] = df['invoice_date'].dt.to_period('M').dt.to_timestamp()
             df['Mes_Num'] = df['invoice_date'].dt.month
-            df['ID_Cliente'] = df['partner_id'].apply(lambda x: x[0] if x else 0)
             df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
+            # Guardamos ID Cliente para cruce con zonas
+            df['ID_Cliente'] = df['partner_id'].apply(lambda x: x[0] if x else 0)
             df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
             df['Venta_Neta'] = df['amount_untaxed_signed']
             
@@ -81,7 +84,7 @@ def cargar_datos_generales():
 
 @st.cache_data(ttl=3600)
 def cargar_zonas_clientes(ids_clientes):
-    """Descarga la ZONA (Provincia/Estado) de los clientes"""
+    """Descarga la ZONA (Provincia) de los clientes"""
     try:
         if not ids_clientes: return pd.DataFrame()
         
@@ -89,13 +92,13 @@ def cargar_zonas_clientes(ids_clientes):
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Buscamos solo los clientes que tenemos en las facturas
-        campos = ['state_id'] # state_id suele ser la Provincia o Zona
+        campos = ['state_id'] 
         registros = models.execute_kw(DB, uid, PASSWORD, 'res.partner', 'read', [list(ids_clientes)], {'fields': campos})
         
         df = pd.DataFrame(registros)
         if not df.empty:
             df['Zona'] = df['state_id'].apply(lambda x: x[1] if x else "Sin Zona")
+            # Renombrar id para cruce
             df.rename(columns={'id': 'ID_Cliente'}, inplace=True)
             return df[['ID_Cliente', 'Zona']]
         return pd.DataFrame()
@@ -118,7 +121,7 @@ def cargar_detalle_productos():
             ['display_type', '=', 'product'],
             ['move_id.move_type', 'in', ['out_invoice', 'out_refund']]
         ]
-        # Traemos move_id para poder cruzar con el cliente de la factura
+        # IMPORTANTE: Traer 'move_id' para cruzar con la factura
         campos = ['date', 'product_id', 'credit', 'debit', 'quantity', 'name', 'move_id']
         
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio])
@@ -127,9 +130,12 @@ def cargar_detalle_productos():
         df = pd.DataFrame(registros)
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'])
-            df['ID_Factura'] = df['move_id'].apply(lambda x: x[0] if x else 0)
             df['ID_Producto'] = df['product_id'].apply(lambda x: x[0] if x else 0)
             df['Producto'] = df['product_id'].apply(lambda x: x[1] if x else "Otros")
+            
+            # ID FACTURA PADRE (La clave del cruce)
+            df['ID_Factura'] = df['move_id'].apply(lambda x: x[0] if x else 0)
+            
             df['Venta_Neta'] = df['credit'] - df['debit']
             
         return df
@@ -190,11 +196,11 @@ st.title("🚀 Monitor Comercial ALROTEK")
 
 tab_kpis, tab_prod, tab_inv, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
-    "📦 Productos", 
-    "🧟 Inventario", 
-    "👥 Clientes",
-    "💼 Vendedores",
-    "🔍 Detalle Cliente" # <--- NUEVA PESTAÑA
+    "📦 Ventas por Producto", 
+    "🧟 Control Inventario", 
+    "👥 Inteligencia Clientes",
+    "💼 Desempeño Vendedores",
+    "🔍 Detalle Cliente"
 ])
 
 with st.spinner('Sincronizando todo...'):
@@ -203,11 +209,10 @@ with st.spinner('Sincronizando todo...'):
     df_cat = cargar_inventario()
     df_metas = cargar_metas()
     
-    # Cargamos Zonas
+    # Cargar Zonas (Provincias)
     if not df_main.empty:
         ids_unicos = df_main['ID_Cliente'].unique().tolist()
         df_zonas = cargar_zonas_clientes(ids_unicos)
-        # Unimos la Zona al DataFrame principal
         if not df_zonas.empty:
             df_main = pd.merge(df_main, df_zonas, on='ID_Cliente', how='left')
             df_main['Zona'] = df_main['Zona'].fillna('Sin Zona')
@@ -265,7 +270,6 @@ with tab_kpis:
 
             st.subheader(f"🎯 Desempeño vs Meta ({anio_sel})")
             colores = ['#27ae60' if r >= m else '#c0392b' for r, m in zip(df_chart['Venta_Actual'], df_chart['Meta'])]
-            
             fig1 = go.Figure()
             fig1.add_trace(go.Bar(x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'], name='Venta Real', marker_color=colores, text=df_chart['Venta_Actual'].apply(lambda x: f'{x/1e6:.0f}' if x > 0 else ''), textposition='auto'))
             fig1.add_trace(go.Scatter(x=df_chart['Mes_Nombre'], y=df_chart['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
@@ -282,7 +286,7 @@ with tab_kpis:
             st.plotly_chart(fig2, use_container_width=True)
             
         with c_vend:
-            st.subheader("🏆 Top Vendedores (vs Año Ant.)")
+            st.subheader("🏆 Top Vendedores")
             rank_actual = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index()
             rank_actual.columns = ['Vendedor', 'Venta_Actual']
             rank_anterior = df_ant_data.groupby('Vendedor')['Venta_Neta'].sum().reset_index()
@@ -383,11 +387,17 @@ with tab_cli:
         
         cli_antes = set(df_c_ant[df_c_ant['Venta_Neta'] > 0]['Cliente'])
         cli_ahora = set(df_c_anio[df_c_anio['Venta_Neta'] > 0]['Cliente'])
+        
         lista_perdidos = list(cli_antes - cli_ahora)
         lista_nuevos = list(cli_ahora - cli_antes)
         
-        monto_perdido = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]['Venta_Neta'].sum() if lista_perdidos else 0
-        monto_nuevo = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]['Venta_Neta'].sum() if lista_nuevos else 0
+        monto_perdido = 0
+        if lista_perdidos:
+            monto_perdido = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]['Venta_Neta'].sum()
+            
+        monto_nuevo = 0
+        if lista_nuevos:
+            monto_nuevo = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]['Venta_Neta'].sum()
         
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Total Clientes Activos", len(cli_ahora))
@@ -397,6 +407,7 @@ with tab_cli:
         
         st.divider()
         
+        # Descargas
         st.subheader("📥 Descargar Reportes")
         col_d1, col_d2, col_d3 = st.columns(3)
         
@@ -422,7 +433,7 @@ with tab_cli:
         with c_top:
             st.subheader("🏆 Top 10 Clientes")
             top_10 = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-            fig_top = px.bar(top_10, x='Venta_Neta', y=top_10.index, orientation='h', text_auto='.2s', color='Venta_Neta')
+            fig_top = px.bar(top_10, x='Venta_Neta', y=top_10.index, orientation='h', text_auto='.2s', color=top_10.values)
             st.plotly_chart(fig_top, use_container_width=True)
             
         with c_analisis:
@@ -435,6 +446,13 @@ with tab_cli:
                 st.plotly_chart(fig_lost, use_container_width=True)
             else:
                 st.success("Retención del 100%.")
+
+        st.subheader("🌱 Top Clientes Nuevos")
+        if lista_nuevos:
+            df_new = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]
+            top_new = df_new.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
+            fig_new = px.bar(top_new, x=top_new.values, y=top_new.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#2ecc71'])
+            st.plotly_chart(fig_new, use_container_width=True)
 
 # === PESTAÑA 5: VENDEDORES ===
 with tab_vend:
@@ -504,58 +522,54 @@ with tab_vend:
             else:
                 st.success(f"Excelente retención.")
 
-# === PESTAÑA 6: DETALLE CLIENTE (NUEVA) ===
+# === PESTAÑA 6: DETALLE CLIENTE ===
 with tab_det:
     if not df_main.empty:
         st.header("🔍 Radiografía por Cliente")
         
-        zonas_disponibles = ["Todas"] + sorted(list(df_main['Zona'].dropna().unique()))
-        zona_sel = st.selectbox("Filtrar por Zona", zonas_disponibles)
+        zonas = ["Todas"] + sorted(list(df_main['Zona'].dropna().unique()))
+        zona_sel = st.selectbox("Filtrar por Zona", zonas)
         
-        if zona_sel != "Todas":
-            df_zona = df_main[df_main['Zona'] == zona_sel]
-        else:
-            df_zona = df_main
-            
+        df_zona = df_main if zona_sel == "Todas" else df_main[df_main['Zona'] == zona_sel]
         clientes_zona = sorted(df_zona['Cliente'].unique())
         cliente_sel = st.selectbox("Seleccionar Cliente", clientes_zona)
         
         if cliente_sel:
-            # Datos del Cliente
-            df_cli_total = df_main[df_main['Cliente'] == cliente_sel]
-            
-            # KPIs Cliente
-            total_comprado = df_cli_total['Venta_Neta'].sum()
-            ultima_compra = df_cli_total['invoice_date'].max()
-            dias_sin_comprar = (datetime.now() - ultima_compra).days
+            df_cli = df_main[df_main['Cliente'] == cliente_sel]
+            total_comprado = df_cli['Venta_Neta'].sum()
+            ultima_compra = df_cli['invoice_date'].max()
+            dias_sin = (datetime.now() - ultima_compra).days
             
             kc1, kc2, kc3 = st.columns(3)
             kc1.metric("Compras Históricas", f"₡ {total_comprado/1e6:,.1f} M")
             kc2.metric("Última Compra", ultima_compra.strftime('%d-%m-%Y'))
-            kc3.metric("Días sin Comprar", dias_sin_comprar, delta=-dias_sin_comprar, delta_color="inverse")
+            kc3.metric("Días sin Comprar", dias_sin, delta=-dias_sin, delta_color="inverse")
             
             st.divider()
             
-            # Productos Favoritos
-            if not df_prod.empty:
-                # Buscamos las facturas de este cliente
-                ids_facturas_cliente = df_cli_total['id'].unique() # Necesitamos ID de factura para cruzar
-                # ERROR: df_main no tiene 'id' por defecto en la carga simple.
-                # CORRECCIÓN: Usamos el nombre de la factura para cruzar (menos eficiente pero funciona)
-                nombres_facturas = df_cli_total['name'].unique()
-                
-                # Filtramos las líneas de producto que pertenecen a esas facturas
-                # (Nota: df_prod no tiene 'move_name', tiene 'move_id'. Necesitamos cruzar por ID)
-                # En esta versión V17 agregué 'ID_Factura' a df_prod y 'id' a df_main
-                
-                # ... Espera, df_main no trajo 'id' en la función original. Lo corrijo en V17 abajo ...
-                
-                # (Parche visual: Si no podemos cruzar por ID, mostramos solo histórico de montos)
-                st.info("Para ver el detalle de productos por cliente, necesitamos recargar la data con IDs.")
+            c_hist, c_prod = st.columns([1, 1])
             
-            # Histórico Anual del Cliente
-            historial = df_cli_total.groupby(df_cli_total['invoice_date'].dt.year)['Venta_Neta'].sum().reset_index()
-            historial.columns = ['Año', 'Venta']
-            fig_h = px.bar(historial, x='Año', y='Venta', text_auto='.2s', title=f"Historial de Compras: {cliente_sel}")
-            fig_h.update_xaxes(type='category')
-            st.plotly_chart(fig_h, use_container_width=True)
+            with c_hist:
+                st.subheader("📅 Historial Anual")
+                hist = df_cli.groupby(df_cli['invoice_date'].dt.year)['Venta_Neta'].sum().reset_index()
+                hist.columns = ['Año', 'Venta']
+                fig_h = px.bar(hist, x='Año', y='Venta', text_auto='.2s')
+                fig_h.update_xaxes(type='category')
+                st.plotly_chart(fig_h, use_container_width=True)
+                
+            with c_prod:
+                st.subheader("📦 Productos Favoritos (Top 10)")
+                if not df_prod.empty:
+                    ids_facturas = set(df_cli['id'].unique()) # Usamos el ID de factura que cargamos
+                    # Filtramos las líneas de producto que pertenecen a esas facturas
+                    # IMPORTANTE: df_prod tiene 'ID_Factura' gracias a la función de carga actualizada
+                    df_prod_cli = df_prod[df_prod['ID_Factura'].isin(ids_facturas)]
+                    
+                    if not df_prod_cli.empty:
+                        top_p_cli = df_prod_cli.groupby('Producto')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
+                        fig_p = px.bar(top_p_cli, x='Venta_Neta', y=top_p_cli.index, orientation='h', text_auto='.2s')
+                        st.plotly_chart(fig_p, use_container_width=True)
+                    else:
+                        st.info("No se encontraron detalles de productos (Rango de fechas limitado).")
+                else:
+                    st.warning("Cargando productos...")
