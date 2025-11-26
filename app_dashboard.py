@@ -66,7 +66,7 @@ def convert_df_to_excel(df):
     return output.getvalue()
 
 def card_kpi(titulo, valor, color_class, nota=""):
-    if isinstance(valor, str): # Si es texto (mensaje de error)
+    if isinstance(valor, str):
         val_fmt = valor
     else:
         val_fmt = f"₡ {valor:,.0f}"
@@ -244,32 +244,54 @@ def cargar_pnl_contable(anio):
 
 @st.cache_data(ttl=900)
 def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
+    """
+    Carga y CALCULA el costo ajustado de horas segun el tipo.
+    Multiplicadores: Doble (x3), Extra (x1.5), Normal (x1).
+    """
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
+        
+        # Solo filtramos por cuenta y fecha (este año) para rapidez
         dominio = [['account_id', 'in', ids_clean], ['date', '>=', f'{datetime.now().year}-01-01']]
         campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
+        
         df = pd.DataFrame(registros)
         if not df.empty:
             def limpiar_tipo(val):
                 if not val: return "No Definido"
                 return str(val)
+            
             df['Tipo_Hora'] = df['x_studio_tipo_horas_1'].apply(limpiar_tipo)
-            df['Costo'] = df['amount'].abs()
+            
+            # LÓGICA DE MULTIPLICADORES SOLICITADA
+            def get_multiplier(tipo):
+                t = tipo.lower()
+                if "doble" in t: return 3.0
+                if "extra" in t: return 1.5
+                return 1.0
+            
+            df['Multiplicador'] = df['Tipo_Hora'].apply(get_multiplier)
+            
+            # Calculo final
+            df['Costo_Base'] = df['amount'].abs()
+            df['Costo'] = df['Costo_Base'] * df['Multiplicador'] # Costo Ajustado
             df['Horas'] = df['unit_amount']
+            
         return df
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=900)
 def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuentas_analiticas):
     """
-    VERSION ROBUSTA (V3.1): Muestra el error real si falla.
+    VERSION 3.1: Búsqueda Robustecida + FIX Error Pandas
     """
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame(), "SIN_SELECCION", []
@@ -277,7 +299,6 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # A. Recopilar IDs para buscar
         ids_analytic_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         ids_projects = []
         if ids_analytic_clean:
@@ -288,12 +309,10 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
         
         ids_search = list(set(ids_analytic_clean + ids_projects))
         
-        # B. BÚSQUEDA 1: Por coincidencia exacta en campo Studio
         ids_locs_studio = []
         if ids_search:
             ids_locs_studio = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', ids_search]]])
         
-        # C. BÚSQUEDA 2: Por Nombre
         ids_locs_name = []
         if nombres_cuentas_analiticas:
             for nombre in nombres_cuentas_analiticas:
@@ -303,17 +322,14 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
                         found = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['name', 'ilike', keyword]]])
                         ids_locs_name.extend(found)
         
-        # D. Unificar
         ids_locs_final = list(set(ids_locs_studio + ids_locs_name))
         
         if not ids_locs_final:
             return pd.DataFrame(), "NO_BODEGA", []
             
-        # E. Obtener Nombres
         loc_names_data = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_locs_final], {'fields': ['complete_name']})
         loc_names = [l['complete_name'] for l in loc_names_data]
         
-        # F. Buscar Stock
         dominio_quant = [
             ['location_id', 'child_of', ids_locs_final], 
             ['company_id', '=', COMPANY_ID]
@@ -329,16 +345,12 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
         df = pd.DataFrame(data_quants)
         if df.empty: return pd.DataFrame(), "NO_STOCK", loc_names
         
-        # G. Procesar (FIX PANDAS GROUPBY LIST)
-        # Odoo retorna product_id como [id, name] o False
-        # Extraemos primero el ID para poder agrupar sin errores
+        # --- FIX ERROR PANDAS LIST ---
         df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
         df['pname'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desconocido")
         
-        # Ahora agrupamos de forma segura
         df_grouped = df.groupby(['pid', 'pname']).agg({'quantity': 'sum'}).reset_index()
         
-        # H. Costos
         ids_prods = df_grouped['pid'].unique().tolist()
         costos = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price']})
         df_costos = pd.DataFrame(costos).rename(columns={'id': 'pid', 'standard_price': 'Costo_Unit'})
@@ -361,7 +373,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v3.1")
+st.title("🚀 Monitor Comercial ALROTEK v3.2")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -569,27 +581,27 @@ with tab_renta:
             ].copy()
             
             if not df_filtered.empty:
-                # KPIs CONTABLES
                 total_ventas = df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum()
                 total_mercaderia = df_filtered[df_filtered['Clasificacion'] == 'Costo Mercadería']['Monto_Neto'].sum()
                 total_wip = df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum()
                 total_horas_contable = df_filtered[df_filtered['Clasificacion'] == 'Costo Horas']['Monto_Neto'].sum()
                 
-                # DATOS EXTRA
                 ids_cuentas_analiticas = df_filtered['id_cuenta_analitica'].dropna().unique().tolist()
                 nombres_cuentas_analiticas = df_filtered['Cuenta_Analitica_Nombre'].unique().tolist()
                 
-                # Horas
+                # Horas con multiplicador
                 df_horas_detalle = cargar_detalle_horas_estructura(ids_cuentas_analiticas)
+                if not df_horas_detalle.empty:
+                    total_horas_ajustado = df_horas_detalle['Costo'].sum()
+                else:
+                    total_horas_ajustado = total_horas_contable
                 
-                # Inventario (Llamada V4)
+                # Inventario
                 df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuentas_analiticas)
                 total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
                 
-                # Feedback Bodegas
                 txt_bodegas = "Sin ubicación asignada"
                 color_bg = "bg-purple"
-                
                 if status_stock == "OK" or status_stock == "NO_STOCK":
                     txt_bodegas = f"Encontradas: {', '.join(bodegas_encontradas)}"
                 elif "ERR" in status_stock:
@@ -599,15 +611,13 @@ with tab_renta:
                     txt_bodegas = "⚠️ No se encontró bodega vinculada"
                     color_bg = "bg-gray"
                 
-                # --- TARJETAS ---
                 k1, k2, k3, k4, k5 = st.columns(5)
                 with k1: card_kpi("Ventas", total_ventas, "bg-green")
                 with k2: card_kpi("Costo Mercadería", total_mercaderia, "bg-orange")
                 with k3: card_kpi("WIP", total_wip, "bg-yellow")
-                with k4: card_kpi("Costo Horas (Contable)", total_horas_contable, "bg-blue")
+                with k4: card_kpi("Costo Horas (Ajustado)", total_horas_ajustado, "bg-blue")
                 with k5: card_kpi("Inventario Sitio", total_stock_sitio, color_bg, nota=txt_bodegas)
                 
-                # --- SECCIONES DETALLE ---
                 c_horas, c_stock = st.columns(2)
                 with c_horas:
                     st.markdown("##### 🕒 Desglose de Horas")
@@ -627,7 +637,6 @@ with tab_renta:
                                      hide_index=True, use_container_width=True)
                     else: st.caption(f"Estado: {status_stock}")
 
-                # 3. Tabla General
                 st.divider()
                 st.markdown("**Detalle Movimientos Contables**")
                 st.dataframe(
