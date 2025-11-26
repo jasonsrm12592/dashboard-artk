@@ -176,6 +176,7 @@ with tab_kpis:
         
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
         
+        # KPIs
         venta = df_anio['Venta_Neta'].sum()
         meta = df_metas[df_metas['Mes'].dt.year == anio_sel]['Meta'].sum()
         cant_facturas = df_anio['name'].nunique()
@@ -298,7 +299,7 @@ with tab_cli:
         monto_perdido = 0
         if lista_perdidos:
             monto_perdido = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]['Venta_Neta'].sum()
-        
+            
         monto_nuevo = 0
         if lista_nuevos:
             monto_nuevo = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]['Venta_Neta'].sum()
@@ -311,31 +312,25 @@ with tab_cli:
         
         st.divider()
         
-        # --- ZONA DE DESCARGAS CLIENTES ---
+        # Descargas Clientes
         st.subheader("📥 Descargar Reportes de Clientes")
         col_d1, col_d2, col_d3 = st.columns(3)
         
-        # 1. TOP CLIENTES
         df_top_all = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
         excel_top = convert_df_to_excel(df_top_all)
-        with col_d1:
-            st.download_button("📂 Ranking Completo Clientes", data=excel_top, file_name=f"Ranking_Clientes_{anio_c_sel}.xlsx")
+        col_d1.download_button("📂 Ranking Completo Clientes", data=excel_top, file_name=f"Ranking_Clientes_{anio_c_sel}.xlsx")
             
-        # 2. PERDIDOS
         if lista_perdidos:
             df_lost_all = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
             df_lost_all.columns = ['Cliente', 'Compra_Año_Anterior']
             excel_lost = convert_df_to_excel(df_lost_all)
-            with col_d2:
-                st.download_button("📉 Lista Clientes Perdidos", data=excel_lost, file_name=f"Clientes_Perdidos_{anio_c_sel}.xlsx")
+            col_d2.download_button("📉 Lista Clientes Perdidos", data=excel_lost, file_name=f"Clientes_Perdidos_{anio_c_sel}.xlsx")
                 
-        # 3. NUEVOS
         if lista_nuevos:
             df_new_all = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
             df_new_all.columns = ['Cliente', 'Venta_Actual']
             excel_new = convert_df_to_excel(df_new_all)
-            with col_d3:
-                st.download_button("🌱 Lista Clientes Nuevos", data=excel_new, file_name=f"Clientes_Nuevos_{anio_c_sel}.xlsx")
+            col_d3.download_button("🌱 Lista Clientes Nuevos", data=excel_new, file_name=f"Clientes_Nuevos_{anio_c_sel}.xlsx")
 
         st.divider()
         
@@ -354,12 +349,16 @@ with tab_cli:
             else:
                 st.success("Retención del 100%.")
 
-        st.divider()
-        st.subheader("🔎 Matriz de Valor")
-        scatter_data = df_c_anio.groupby('Cliente').agg({'Venta_Neta': 'sum', 'name': 'nunique'}).reset_index()
-        scatter_data.columns = ['Cliente', 'Monto', 'Frecuencia']
-        scatter_data['Size'] = scatter_data['Monto'].abs().replace(0, 1)
-        
-        fig_s = px.scatter(scatter_data, x='Frecuencia', y='Monto', size='Size', 
-                           color='Monto', hover_name='Cliente', color_continuous_scale='RdBu')
-        st.plotly_chart(fig_s, use_container_width=True)
+        st.subheader("🌱 Gráfico Clientes Nuevos")
+        if lista_nuevos:
+            df_new_rank = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]
+            top_new = df_new_rank.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(15)
+            # Gráfico de Clientes Nuevos
+            fig_new = px.bar(top_new, x=top_new.values, y=top_new.index, orientation='h', text_auto='.2s', color=top_new.values)
+            fig_new.update_layout(xaxis_title="Venta Acumulada", yaxis_title="", height=450)
+            st.plotly_chart(fig_new, use_container_width=True)
+            
+            with st.expander("Ver detalle en lista"):
+                st.dataframe(top_new.to_frame("Venta Acumulada").style.format("₡ {:,.0f}"), use_container_width=True)
+        else:
+            st.info("No hay clientes nuevos en este periodo.")
