@@ -478,4 +478,23 @@ with tab_vend:
 
         st.divider()
         
-        col_v_top, col_v_lost = st.columns
+        col_v_top, col_v_lost = st.columns(2)
+        with col_v_top:
+            st.subheader(f"🌟 Mejores Clientes")
+            if not df_v_anio.empty:
+                top_cli_v = df_v_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
+                fig_vt = px.bar(top_cli_v, x=top_cli_v.values, y=top_cli_v.index, orientation='h', text_auto='.2s', color=top_cli_v.values)
+                st.plotly_chart(fig_vt, use_container_width=True)
+            else:
+                st.info("Sin ventas registradas.")
+                
+        with col_v_lost:
+            st.subheader("⚠️ Cartera Perdida")
+            if perdidos_v:
+                df_lost_v = df_v_ant[df_v_ant['Cliente'].isin(perdidos_v)]
+                top_lost_v = df_lost_v.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
+                fig_vl = px.bar(top_lost_v, x=top_lost_v.values, y=top_lost_v.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])
+                fig_vl.update_layout(xaxis_title="Monto Comprado Año Anterior")
+                st.plotly_chart(fig_vl, use_container_width=True)
+            else:
+                st.success(f"Excelente retención.")
