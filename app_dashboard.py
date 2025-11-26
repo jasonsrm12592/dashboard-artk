@@ -165,7 +165,6 @@ def cargar_detalle_productos():
 
 @st.cache_data(ttl=3600)
 def cargar_inventario_general():
-    """Inventario global para pestaña 4"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -240,7 +239,6 @@ def cargar_pnl_contable(anio):
 
 @st.cache_data(ttl=900)
 def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
-    """Descarga detalle de horas desde account.analytic.line usando el campo STUDIO"""
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -269,21 +267,24 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
 
 @st.cache_data(ttl=900)
 def cargar_inventario_ubicacion_proyecto(ids_proyectos_analiticos):
-    """Busca stock en ubicaciones vinculadas a un proyecto por Studio"""
+    """Busca stock usando child_of en la ubicación para encontrar items en sub-ubicaciones"""
     try:
         if not ids_proyectos_analiticos: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # 1. Buscar Ubicaciones con el campo x_studio_field_qCgKk
-        dominio_loc = [['x_studio_field_qCgKk', 'in', ids_proyectos_analiticos], ['usage', '=', 'internal']]
+        # 1. Buscar Ubicaciones Padre vinculadas al proyecto
+        dominio_loc = [['x_studio_field_qCgKk', 'in', ids_proyectos_analiticos]]
         ids_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
         
         if not ids_locs: return pd.DataFrame()
         
-        # 2. Traer Quants
-        dominio_quant = [['location_id', 'in', ids_locs]]
+        # 2. Traer Quants usando 'child_of' para ver todo lo que hay dentro
+        dominio_quant = [
+            ['location_id', 'child_of', ids_locs], 
+            ['company_id', '=', COMPANY_ID]
+        ]
         campos_quant = ['product_id', 'quantity', 'location_id']
         ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
         data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': campos_quant})
@@ -305,7 +306,6 @@ def cargar_inventario_ubicacion_proyecto(ids_proyectos_analiticos):
         return df
     except Exception: return pd.DataFrame()
 
-# --- FUNCIÓN QUE FALTABA ---
 def cargar_metas():
     if os.path.exists("metas.xlsx"):
         df = pd.read_excel("metas.xlsx")
@@ -316,7 +316,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v2.5.1")
+st.title("🚀 Monitor Comercial ALROTEK v2.6")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
