@@ -67,6 +67,7 @@ def cargar_datos_generales():
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
             df['Mes'] = df['invoice_date'].dt.to_period('M').dt.to_timestamp()
             df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
+            # Importante: Odoo devuelve [ID, Nombre], extraemos el nombre
             df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
             df['Venta_Neta'] = df['amount_untaxed_signed']
             
@@ -160,7 +161,14 @@ def cargar_metas():
 # --- 5. INTERFAZ ---
 st.title("🚀 Monitor Comercial ALROTEK")
 
-tab_kpis, tab_prod, tab_inv, tab_cli = st.tabs(["📊 Visión General", "📦 Ventas por Producto", "🧟 Control Inventario", "👥 Inteligencia Clientes"])
+# AHORA SON 5 PESTAÑAS
+tab_kpis, tab_prod, tab_inv, tab_cli, tab_vend = st.tabs([
+    "📊 Visión General", 
+    "📦 Ventas por Producto", 
+    "🧟 Control Inventario", 
+    "👥 Inteligencia Clientes",
+    "💼 Desempeño Vendedores" # <--- NUEVA
+])
 
 with st.spinner('Sincronizando todo...'):
     df_main = cargar_datos_generales()
@@ -176,7 +184,6 @@ with tab_kpis:
         
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
         
-        # KPIs
         venta = df_anio['Venta_Neta'].sum()
         meta = df_metas[df_metas['Mes'].dt.year == anio_sel]['Meta'].sum()
         cant_facturas = df_anio['name'].nunique()
@@ -190,7 +197,6 @@ with tab_kpis:
 
         st.divider()
         
-        # Botón Descarga General
         col_down, _ = st.columns([1, 4])
         with col_down:
             excel_data = convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Vendedor', 'Venta_Neta']])
@@ -226,7 +232,6 @@ with tab_prod:
         df_p_anio['Tipo'] = df_p_anio['Tipo'].fillna('Desconocido')
         df_p_anio = df_p_anio[df_p_anio['Tipo'].isin(['Almacenable', 'Servicio'])]
 
-        # Botón Descarga Productos
         col_down_p, _ = st.columns([1, 4])
         with col_down_p:
             df_export_prod = df_p_anio.groupby(['Referencia', 'Producto', 'Tipo'])[['quantity', 'Venta_Neta']].sum().reset_index()
@@ -244,7 +249,6 @@ with tab_prod:
             st.markdown(f"**Top 10 Productos ({anio_p_sel})**")
             tipo_ver = st.radio("Ver:", ["Todos", "Almacenable", "Servicio"], horizontal=True)
             df_show = df_p_anio if tipo_ver == "Todos" else df_p_anio[df_p_anio['Tipo'] == tipo_ver]
-            
             top_prod = df_show.groupby('Producto')[['Venta_Neta', 'quantity']].sum().reset_index()
             top_10 = top_prod.sort_values('Venta_Neta', ascending=False).head(10).sort_values('Venta_Neta', ascending=True)
             
@@ -264,7 +268,6 @@ with tab_inv:
         df_zombies = df_stock_real[~df_stock_real['ID_Producto'].isin(ids_vendidos)].copy()
         df_zombies = df_zombies[df_zombies['create_date'].dt.year < anio_hueso]
         df_zombies = df_zombies[df_zombies['Tipo'] == 'Almacenable']
-        
         df_zombies = df_zombies.sort_values('Valor_Inventario', ascending=False)
         total_atrapado = df_zombies['Valor_Inventario'].sum()
         
@@ -277,10 +280,8 @@ with tab_inv:
         m1.metric("Capital Inmovilizado", f"₡ {total_atrapado/1e6:,.1f} M")
         m2.metric("Items Sin Rotación", len(df_zombies))
         
-        # GRÁFICO ZOMBIES (Nuevo)
-        st.markdown("**Top 15 Productos con Mayor Capital Atrapado**")
-        top_zombies = df_zombies.head(15).sort_values('Valor_Inventario', ascending=True) # Ordenar para gráfico H
-        
+        # Gráfico Huesos
+        top_zombies = df_zombies.head(15).sort_values('Valor_Inventario', ascending=True)
         fig_z = px.bar(top_zombies, x='Valor_Inventario', y='Producto', orientation='h', 
                        text_auto='.2s', color='Valor_Inventario', color_continuous_scale='Reds')
         fig_z.update_layout(height=500, xaxis_title="Monto Atrapado (Costo)")
@@ -299,71 +300,119 @@ with tab_cli:
         lista_perdidos = list(cli_antes - cli_ahora)
         lista_nuevos = list(cli_ahora - cli_antes)
         
-        monto_perdido = 0
-        if lista_perdidos:
-            monto_perdido = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]['Venta_Neta'].sum()
-            
-        monto_nuevo = 0
-        if lista_nuevos:
-            monto_nuevo = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]['Venta_Neta'].sum()
-        
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total Clientes Activos", len(cli_ahora))
-        k2.metric("Clientes Nuevos", len(lista_nuevos))
-        k3.metric("Venta de Nuevos", f"₡ {monto_nuevo/1e6:,.1f} M")
-        k4.metric("Venta Perdida (Churn)", f"₡ {monto_perdido/1e6:,.1f} M", delta=-len(lista_perdidos), delta_color="inverse")
-        
-        st.divider()
-        
-        # Descargas Clientes
-        st.subheader("📥 Descargas Disponibles")
+        # Descargas
+        st.subheader("📥 Descargar Reportes")
         col_d1, col_d2, col_d3 = st.columns(3)
         
         df_top_all = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
         excel_top = convert_df_to_excel(df_top_all)
-        col_d1.download_button("📂 Ranking Completo Clientes", data=excel_top, file_name=f"Ranking_Clientes_{anio_c_sel}.xlsx")
+        col_d1.download_button("📂 Ranking Completo", data=excel_top, file_name=f"Ranking_Clientes_{anio_c_sel}.xlsx")
             
         if lista_perdidos:
             df_lost_all = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
             df_lost_all.columns = ['Cliente', 'Compra_Año_Anterior']
             excel_lost = convert_df_to_excel(df_lost_all)
-            col_d2.download_button("📉 Lista Clientes Perdidos", data=excel_lost, file_name=f"Clientes_Perdidos_{anio_c_sel}.xlsx")
+            col_d2.download_button("📉 Clientes Perdidos", data=excel_lost, file_name=f"Clientes_Perdidos_{anio_c_sel}.xlsx")
                 
         if lista_nuevos:
             df_new_all = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
             df_new_all.columns = ['Cliente', 'Venta_Actual']
             excel_new = convert_df_to_excel(df_new_all)
-            col_d3.download_button("🌱 Lista Clientes Nuevos", data=excel_new, file_name=f"Clientes_Nuevos_{anio_c_sel}.xlsx")
+            col_d3.download_button("🌱 Clientes Nuevos", data=excel_new, file_name=f"Clientes_Nuevos_{anio_c_sel}.xlsx")
 
         st.divider()
         
-        # GRÁFICOS CLIENTES
         c_top, c_analisis = st.columns([1, 1])
-        
         with c_top:
             st.subheader("🏆 Top 10 Clientes")
-            top_10_cli = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-            fig_top = px.bar(top_10_cli, x='Venta_Neta', y=top_10_cli.index, orientation='h', text_auto='.2s', color='Venta_Neta')
-            fig_top.update_layout(height=400)
+            top_10 = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
+            fig_top = px.bar(top_10, x=top_10.values, y=top_10.index, orientation='h', text_auto='.2s', color=top_10.values)
             st.plotly_chart(fig_top, use_container_width=True)
             
         with c_analisis:
-            st.subheader("⚠️ Top 10 Clientes Perdidos")
+            st.subheader("⚠️ Top Perdidos (Oportunidad)")
             if lista_perdidos:
                 df_lost = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]
                 top_lost = df_lost.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-                fig_lost = px.bar(top_lost, x='Venta_Neta', y=top_lost.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])
-                fig_lost.update_layout(height=400, xaxis_title="Compra Año Anterior")
+                fig_lost = px.bar(top_lost, x=top_lost.values, y=top_lost.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])
+                fig_lost.update_layout(xaxis_title="Compró Año Pasado")
                 st.plotly_chart(fig_lost, use_container_width=True)
             else:
                 st.success("Retención del 100%.")
 
-        st.subheader("🌱 Top 10 Clientes Nuevos")
+        st.subheader("🌱 Top Clientes Nuevos")
         if lista_nuevos:
             df_new = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]
             top_new = df_new.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-            fig_new = px.bar(top_new, x='Venta_Neta', y=top_new.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#2ecc71'])
-            fig_new.update_layout(height=400, xaxis_title="Venta Acumulada")
+            fig_new = px.bar(top_new, x=top_new.values, y=top_new.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#2ecc71'])
             st.plotly_chart(fig_new, use_container_width=True)
-        else:
-            st.info("No hay clientes nuevos en este periodo.")
+
+# === PESTAÑA 5: VENDEDORES (NUEVA) ===
+with tab_vend:
+    if not df_main.empty:
+        st.header("💼 Análisis de Desempeño Individual")
+        
+        anios_v = sorted(df_main['invoice_date'].dt.year.unique(), reverse=True)
+        col_sel1, col_sel2 = st.columns(2)
+        
+        with col_sel1:
+            anio_v_sel = st.selectbox("Año de Evaluación", anios_v, key="vend_anio")
+        
+        # Obtener lista de vendedores
+        lista_vendedores = sorted(df_main['Vendedor'].unique())
+        with col_sel2:
+            vendedor_sel = st.selectbox("Seleccionar Comercial", lista_vendedores)
+            
+        # Filtrar Datos
+        df_v_anio = df_main[(df_main['invoice_date'].dt.year == anio_v_sel) & (df_main['Vendedor'] == vendedor_sel)]
+        df_v_ant = df_main[(df_main['invoice_date'].dt.year == (anio_v_sel - 1)) & (df_main['Vendedor'] == vendedor_sel)]
+        
+        # KPIs Individuales
+        venta_ind = df_v_anio['Venta_Neta'].sum()
+        facturas_ind = df_v_anio['name'].nunique()
+        ticket_ind = (venta_ind / facturas_ind) if facturas_ind > 0 else 0
+        
+        # Cálculo de clientes perdidos DEL VENDEDOR
+        cli_v_antes = set(df_v_ant[df_v_ant['Venta_Neta'] > 0]['Cliente'])
+        cli_v_ahora = set(df_v_anio[df_v_anio['Venta_Neta'] > 0]['Cliente'])
+        perdidos_v = list(cli_v_antes - cli_v_ahora)
+        
+        kv1, kv2, kv3, kv4 = st.columns(4)
+        kv1.metric(f"Venta Total {vendedor_sel}", f"₡ {venta_ind/1e6:,.1f} M")
+        kv2.metric("Clientes Activos", len(cli_v_ahora))
+        kv3.metric("Ticket Promedio", f"₡ {ticket_ind:,.0f}")
+        kv4.metric("Clientes en Riesgo (Perdidos)", len(perdidos_v), delta=-len(perdidos_v), delta_color="inverse")
+        
+        st.divider()
+        
+        col_v_top, col_v_lost = st.columns(2)
+        
+        with col_v_top:
+            st.subheader(f"🌟 Mejores Clientes de {vendedor_sel}")
+            if not df_v_anio.empty:
+                top_cli_v = df_v_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
+                fig_vt = px.bar(top_cli_v, x=top_cli_v.values, y=top_cli_v.index, orientation='h', text_auto='.2s', color=top_cli_v.values)
+                st.plotly_chart(fig_vt, use_container_width=True)
+            else:
+                st.info("Sin ventas registradas en este periodo.")
+                
+        with col_v_lost:
+            st.subheader("⚠️ Cartera Perdida (Prioridad Recuperación)")
+            if perdidos_v:
+                df_lost_v = df_v_ant[df_v_ant['Cliente'].isin(perdidos_v)]
+                # Ordenar por quién compraba más el año pasado
+                top_lost_v = df_lost_v.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
+                
+                fig_vl = px.bar(top_lost_v, x=top_lost_v.values, y=top_lost_v.index, orientation='h', 
+                                text_auto='.2s', color_discrete_sequence=['#e74c3c'])
+                fig_vl.update_layout(xaxis_title="Monto Comprado Año Anterior")
+                st.plotly_chart(fig_vl, use_container_width=True)
+                
+                # Botón descarga lista de llamadas
+                st.markdown("##### 📞 Descargar Lista de Llamadas")
+                df_llamadas = df_lost_v.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
+                df_llamadas.columns = ['Cliente', 'Compra_Año_Pasado']
+                excel_call = convert_df_to_excel(df_llamadas)
+                st.download_button(f"📥 Descargar Perdidos de {vendedor_sel}", data=excel_call, file_name=f"Recuperacion_{vendedor_sel}.xlsx")
+            else:
+                st.success(f"¡Excelente! {vendedor_sel} retuvo al 100% de su cartera.")
