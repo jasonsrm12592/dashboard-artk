@@ -6,6 +6,7 @@ import plotly.express as px
 from datetime import datetime
 import io
 import os
+import ast  # LIBRERÍA NUEVA PARA SEGURIDAD
 
 # --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="Alrotek Sales Monitor", layout="wide")
@@ -28,7 +29,7 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # IDs Contables (Según tu imagen)
+    # IDs Contables
     IDS_INGRESOS = [68, 398, 66, 69, 401, 403, 404, 405, 406, 407, 408, 409, 410, 77, 78]
     ID_COSTO_RETAIL = 76
     IDS_COSTO_PROY = [399, 400, 402, 395]
@@ -50,7 +51,7 @@ def convert_df_to_excel(df):
 
 @st.cache_data(ttl=900) 
 def cargar_datos_generales():
-    """Descarga FACTURAS"""
+    """Descarga FACTURAS DE VENTA"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -79,6 +80,52 @@ def cargar_datos_generales():
             df = df[~df['name'].str.contains("WT-", case=False, na=False)]
         return df
     except Exception as e: return pd.DataFrame()
+
+@st.cache_data(ttl=900)
+def cargar_cartera():
+    """Descarga CUENTAS POR COBRAR (Cartera)"""
+    try:
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
+        # Facturas de cliente (out_invoice) publicadas (posted) y NO pagadas
+        dominio = [
+            ['move_type', '=', 'out_invoice'],
+            ['state', '=', 'posted'],
+            ['payment_state', 'in', ['not_paid', 'partial']],
+            ['amount_residual', '>', 0],
+            ['company_id', '=', COMPANY_ID]
+        ]
+        
+        campos = ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'partner_id', 'invoice_user_id']
+        ids = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'search', [dominio])
+        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'read', [ids], {'fields': campos})
+        
+        df = pd.DataFrame(registros)
+        if not df.empty:
+            df['invoice_date'] = pd.to_datetime(df['invoice_date'])
+            df['invoice_date_due'] = pd.to_datetime(df['invoice_date_due'])
+            df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
+            df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
+            
+            # Calcular antigüedad
+            hoy = pd.Timestamp.now()
+            df['Dias_Vencido'] = (hoy - df['invoice_date_due']).dt.days
+            
+            def bucket_cartera(dias):
+                if dias < 0: return "Por Vencer"
+                if dias <= 30: return "0-30 Días"
+                if dias <= 60: return "31-60 Días"
+                if dias <= 90: return "61-90 Días"
+                return "+90 Días"
+            
+            df['Antiguedad'] = df['Dias_Vencido'].apply(bucket_cartera)
+            orden_buckets = ["Por Vencer", "0-30 Días", "31-60 Días", "61-90 Días", "+90 Días"]
+            df['Antiguedad'] = pd.Categorical(df['Antiguedad'], categories=orden_buckets, ordered=True)
+            
+        return df
+    except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def cargar_datos_clientes_extendido(ids_clientes):
@@ -170,7 +217,6 @@ def cargar_estructura_analitica():
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Traemos Planes y Cuentas (Activos y Archivados)
         dominio_todo = ['|', ['active', '=', True], ['active', '=', False]]
         
         ids_plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'search', [dominio_todo])
@@ -234,11 +280,13 @@ def cargar_metas():
 # --- 5. INTERFAZ ---
 st.title("🚀 Monitor Comercial ALROTEK")
 
-tab_kpis, tab_prod, tab_renta, tab_inv, tab_cli, tab_vend, tab_det = st.tabs([
+# Definición de pestañas (Incluye nueva 'Cartera')
+tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
     "📦 Productos", 
     "📈 Rentabilidad P&L", 
     "🧟 Inventario", 
+    "💰 Cartera",
     "👥 Segmentación",
     "💼 Vendedores",
     "🔍 Radiografía"
@@ -304,16 +352,17 @@ with tab_kpis:
                 if not df_analitica.empty:
                     mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre']))
                 
+                # --- VERSIÓN SEGURA DE CLASIFICACIÓN ---
                 def clasificar_linea(dist):
                     if not dist: return "Retail / Mostrador"
                     try:
-                        d = dist if isinstance(dist, dict) else eval(str(dist))
+                        d = dist if isinstance(dist, dict) else ast.literal_eval(str(dist))
                         if not d: return "Retail / Mostrador"
                         for k in d.keys():
                             plan = mapa_cuentas.get(str(k))
-                            if plan: return plan # Retornamos EL PLAN, no la cuenta
+                            if plan: return plan
                     except: pass
-                    return "Otros Proyectos" # Fallback seguro si hay ID pero no mapa
+                    return "Otros Proyectos"
 
                 df_lineas['Linea_Negocio'] = df_lineas['analytic_distribution'].apply(clasificar_linea)
                 ventas_linea = df_lineas.groupby('Linea_Negocio')['Venta_Neta'].sum().reset_index()
@@ -522,7 +571,55 @@ with tab_inv:
             use_container_width=True
         )
 
-# === PESTAÑA 5: SEGMENTACIÓN CLIENTES ===
+# === PESTAÑA 5 (NUEVA): CARTERA ===
+with tab_cx:
+    with st.spinner('Analizando deudas...'):
+        df_cx = cargar_cartera()
+    
+    if not df_cx.empty:
+        total_deuda = df_cx['amount_residual'].sum()
+        total_vencido = df_cx[df_cx['Dias_Vencido'] > 0]['amount_residual'].sum()
+        pct_vencido = (total_vencido / total_deuda * 100) if total_deuda > 0 else 0
+        
+        # 1. KPIs Superiores
+        kcx1, kcx2, kcx3 = st.columns(3)
+        kcx1.metric("Total por Cobrar", f"₡ {total_deuda/1e6:,.1f} M")
+        kcx2.metric("Cartera Vencida (>0 días)", f"₡ {total_vencido/1e6:,.1f} M")
+        kcx3.metric("Salud de Cartera", f"{100-pct_vencido:.1f}% Al Día", delta_color="normal" if pct_vencido < 20 else "inverse")
+        
+        st.divider()
+        
+        # 2. Gráficos Principales
+        col_cx_g1, col_cx_g2 = st.columns([2, 1])
+        
+        with col_cx_g1:
+            st.subheader("⏳ Antigüedad de Saldos")
+            df_buckets = df_cx.groupby('Antiguedad')['amount_residual'].sum().reset_index()
+            colores_cx = {
+                "Por Vencer": "#2ecc71", 
+                "0-30 Días": "#f1c40f", 
+                "31-60 Días": "#e67e22", 
+                "61-90 Días": "#e74c3c", 
+                "+90 Días": "#c0392b"
+            }
+            fig_cx = px.bar(df_buckets, x='Antiguedad', y='amount_residual', text_auto='.2s', color='Antiguedad', color_discrete_map=colores_cx)
+            fig_cx.update_layout(showlegend=False, height=400)
+            st.plotly_chart(fig_cx, use_container_width=True)
+            
+        with col_cx_g2:
+            st.subheader("🚨 Top Deudores")
+            top_deudores = df_cx.groupby('Cliente')['amount_residual'].sum().sort_values(ascending=False).head(10).reset_index()
+            st.dataframe(top_deudores.style.format({'amount_residual': '₡ {:,.0f}'}), hide_index=True, use_container_width=True)
+
+        st.divider()
+        col_down_cx, _ = st.columns([1, 4])
+        with col_down_cx:
+            excel_cx = convert_df_to_excel(df_cx[['invoice_date', 'invoice_date_due', 'name', 'Cliente', 'Vendedor', 'amount_total', 'amount_residual', 'Antiguedad']])
+            st.download_button("📥 Descargar Reporte Cobros", data=excel_cx, file_name=f"Cartera_Alrotek_{datetime.now().date()}.xlsx")
+    else:
+        st.success("¡Felicidades! No hay cuentas por cobrar pendientes.")
+
+# === PESTAÑA 6: SEGMENTACIÓN CLIENTES ===
 with tab_cli:
     if not df_main.empty:
         st.subheader("🌍 Distribución de Ventas")
@@ -589,7 +686,7 @@ with tab_cli:
                 st.plotly_chart(fig_lost, use_container_width=True)
             else: st.success("Retención del 100%.")
 
-# === PESTAÑA 6: VENDEDORES ===
+# === PESTAÑA 7: VENDEDORES ===
 with tab_vend:
     if not df_main.empty:
         st.header("💼 Análisis de Desempeño Individual")
@@ -642,7 +739,7 @@ with tab_vend:
                 st.plotly_chart(fig_vl, use_container_width=True)
             else: st.success(f"Excelente retención.")
 
-# === PESTAÑA 7: RADIOGRAFÍA CLIENTE ===
+# === PESTAÑA 8: RADIOGRAFÍA CLIENTE ===
 with tab_det:
     if not df_main.empty:
         st.header("🔍 Radiografía Individual")
