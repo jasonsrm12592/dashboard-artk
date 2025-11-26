@@ -171,7 +171,6 @@ def cargar_inventario_general():
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         try: ids_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
         except: ids_kits = []
-        
         dominio = [['active', '=', True]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'create_date', 'default_code']})
@@ -245,8 +244,12 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
+        # Asegurar que sean INT
+        ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
+        if not ids_clean: return pd.DataFrame()
+
         dominio = [
-            ['account_id', 'in', ids_cuentas_analiticas],
+            ['account_id', 'in', ids_clean],
             ['date', '>=', f'{datetime.now().year}-01-01']
         ]
         campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name']
@@ -267,20 +270,32 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
 
 @st.cache_data(ttl=900)
 def cargar_inventario_ubicacion_proyecto(ids_proyectos_analiticos):
-    """Busca stock usando child_of en la ubicación para encontrar items en sub-ubicaciones"""
+    """
+    Busca stock en ubicaciones vinculadas a un proyecto.
+    CORRECCIÓN CRÍTICA:
+    1. Busca la ubicación con el campo Studio (sin importar si es View o Internal).
+    2. Usa 'child_of' para encontrar stock en cualquier sub-ubicación.
+    3. Convierte IDs a enteros para evitar errores XML-RPC.
+    """
     try:
         if not ids_proyectos_analiticos: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # 1. Buscar Ubicaciones Padre vinculadas al proyecto
-        dominio_loc = [['x_studio_field_qCgKk', 'in', ids_proyectos_analiticos]]
+        # 1. Limpieza de IDs (Float -> Int)
+        ids_clean = [int(x) for x in ids_proyectos_analiticos if pd.notna(x) and x != 0]
+        if not ids_clean: return pd.DataFrame()
+
+        # 2. Buscar Ubicaciones Padre vinculadas al proyecto
+        # Quitamos 'usage'='internal' para encontrar carpetas padres o vistas
+        dominio_loc = [['x_studio_field_qCgKk', 'in', ids_clean]]
         ids_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
         
         if not ids_locs: return pd.DataFrame()
         
-        # 2. Traer Quants usando 'child_of' para ver todo lo que hay dentro
+        # 3. Traer Quants (Stock Físico)
+        # Usamos 'child_of' para ver recursivamente todo lo que hay dentro de esas ubicaciones
         dominio_quant = [
             ['location_id', 'child_of', ids_locs], 
             ['company_id', '=', COMPANY_ID]
@@ -291,17 +306,21 @@ def cargar_inventario_ubicacion_proyecto(ids_proyectos_analiticos):
         
         df = pd.DataFrame(data_quants)
         if not df.empty:
-            # 3. Traer Costos
-            ids_prods = [p[0] for p in df['product_id'] if p]
-            ids_prods = list(set(ids_prods))
+            # Agrupar por producto para simplificar
+            df = df.groupby('product_id').agg({'quantity': 'sum'}).reset_index()
+            
+            # Limpiar columna product_id que viene como [id, nombre]
+            df['pid'] = df['product_id'].apply(lambda x: x[0] if x else 0)
+            
+            # 4. Traer Costos
+            ids_prods = df['pid'].unique().tolist()
             costos = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'name']})
             df_costos = pd.DataFrame(costos).rename(columns={'id': 'pid', 'standard_price': 'Costo_Unit', 'name': 'Producto_Nombre'})
             
-            df['pid'] = df['product_id'].apply(lambda x: x[0] if x else 0)
             df = pd.merge(df, df_costos, on='pid', how='left')
             
             df['Valor_Total'] = df['quantity'] * df['Costo_Unit']
-            df = df[df['quantity'] != 0]
+            df = df[df['quantity'] != 0] # Quitar ceros
             
         return df
     except Exception: return pd.DataFrame()
@@ -316,7 +335,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v2.6")
+st.title("🚀 Monitor Comercial ALROTEK v2.7")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
