@@ -66,7 +66,7 @@ def cargar_datos_generales():
         if not df.empty:
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
             df['Mes'] = df['invoice_date'].dt.to_period('M').dt.to_timestamp()
-            df['Mes_Num'] = df['invoice_date'].dt.month # Para comparar años mes a mes
+            df['Mes_Num'] = df['invoice_date'].dt.month
             df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
             df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
             df['Venta_Neta'] = df['amount_untaxed_signed']
@@ -155,7 +155,7 @@ def cargar_metas():
     if os.path.exists("metas.xlsx"):
         df = pd.read_excel("metas.xlsx")
         df['Mes'] = pd.to_datetime(df['Mes'])
-        # Asegurar que hay columna de mes numérico para cruces
+        # Asegurar columnas para cruce
         df['Mes_Num'] = df['Mes'].dt.month
         df['Anio'] = df['Mes'].dt.year
         return df
@@ -178,100 +178,115 @@ with st.spinner('Sincronizando todo...'):
     df_cat = cargar_inventario()
     df_metas = cargar_metas()
 
-# === PESTAÑA 1: GENERAL (COMPARATIVO) ===
+# === PESTAÑA 1: GENERAL (DOBLE GRÁFICO) ===
 with tab_kpis:
     if not df_main.empty:
         anios = sorted(df_main['invoice_date'].dt.year.unique(), reverse=True)
         anio_sel = st.selectbox("Año Fiscal (Principal)", anios, key="kpi_anio")
         anio_ant = anio_sel - 1
         
-        # Datos Año Actual
+        # Datos
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
+        df_ant_data = df_main[df_main['invoice_date'].dt.year == anio_ant]
         
         # KPIs
         venta = df_anio['Venta_Neta'].sum()
+        venta_ant_total = df_ant_data['Venta_Neta'].sum()
+        delta_anual = ((venta - venta_ant_total) / venta_ant_total * 100) if venta_ant_total > 0 else 0
+        
         metas_filtradas = df_metas[df_metas['Anio'] == anio_sel]
         meta = metas_filtradas['Meta'].sum()
+        
         cant_facturas = df_anio['name'].nunique()
         ticket_promedio = (venta / cant_facturas) if cant_facturas > 0 else 0
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Venta Total", f"₡ {venta/1e6:,.1f} M")
+        c1.metric("Venta Total", f"₡ {venta/1e6:,.1f} M", f"{delta_anual:.1f}% vs {anio_ant}")
         c2.metric("Meta Anual", f"₡ {meta/1e6:,.1f} M")
         c3.metric("Cumplimiento", f"{(venta/meta*100) if meta>0 else 0:.1f}%")
         c4.metric("Ticket Promedio", f"₡ {ticket_promedio:,.0f}", f"{cant_facturas} Ops")
 
         st.divider()
         
-        # Botón Descarga General
+        # Descarga
         col_down, _ = st.columns([1, 4])
         with col_down:
             excel_data = convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Vendedor', 'Venta_Neta']])
             st.download_button("📥 Descargar Detalle Facturas", data=excel_data, file_name=f"Ventas_{anio_sel}.xlsx")
 
-        # --- GRÁFICO COMPARATIVO (NUEVO) ---
-        c_graf, c_vend = st.columns([2, 1])
-        with c_graf:
-            # Preparar datos Año Actual
-            v_mes_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
-            v_mes_act.columns = ['Mes_Num', 'Venta_Actual']
-            
-            # Preparar datos Año Anterior
-            df_ant = df_main[df_main['invoice_date'].dt.year == anio_ant]
-            v_mes_ant = df_ant.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
-            v_mes_ant.columns = ['Mes_Num', 'Venta_Anterior']
-            
-            # Preparar Metas
-            v_metas = metas_filtradas.groupby('Mes_Num')['Meta'].sum().reset_index()
-            
-            # Unir todo en un solo DataFrame Maestro
-            df_chart = pd.DataFrame({'Mes_Num': range(1, 13)})
-            df_chart = pd.merge(df_chart, v_mes_ant, on='Mes_Num', how='left').fillna(0)
-            df_chart = pd.merge(df_chart, v_mes_act, on='Mes_Num', how='left').fillna(0)
-            df_chart = pd.merge(df_chart, v_metas, on='Mes_Num', how='left').fillna(0)
-            
-            # Nombres de meses para el eje X
-            nombres_meses = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 
-                             7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
-            df_chart['Mes_Nombre'] = df_chart['Mes_Num'].map(nombres_meses)
+        # --- SECCIÓN DE GRÁFICOS SEPARADOS ---
+        
+        # Preparar datos mensuales
+        v_mes_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
+        v_mes_act.columns = ['Mes_Num', 'Venta_Actual']
+        
+        v_mes_ant = df_ant_data.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
+        v_mes_ant.columns = ['Mes_Num', 'Venta_Anterior']
+        
+        v_metas = metas_filtradas.groupby('Mes_Num')['Meta'].sum().reset_index()
+        
+        # DataFrame Maestro para Gráficos
+        df_chart = pd.DataFrame({'Mes_Num': range(1, 13)})
+        df_chart = pd.merge(df_chart, v_mes_ant, on='Mes_Num', how='left').fillna(0)
+        df_chart = pd.merge(df_chart, v_mes_act, on='Mes_Num', how='left').fillna(0)
+        df_chart = pd.merge(df_chart, v_metas, on='Mes_Num', how='left').fillna(0)
+        
+        nombres_meses = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 
+                         7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
+        df_chart['Mes_Nombre'] = df_chart['Mes_Num'].map(nombres_meses)
 
-            # Construir Gráfico Combinado
-            fig = go.Figure()
+        # GRÁFICO 1: CUMPLIMIENTO DE META (SEMÁFORO)
+        col_g1, col_g2 = st.columns(2)
+        
+        with col_g1:
+            st.subheader(f"🎯 Desempeño vs Meta ({anio_sel})")
+            # Lógica Semáforo
+            colores = ['#27ae60' if r >= m else '#c0392b' for r, m in zip(df_chart['Venta_Actual'], df_chart['Meta'])]
             
-            # 1. Barra Año Anterior (Gris o tenue)
-            fig.add_trace(go.Bar(
+            fig1 = go.Figure()
+            fig1.add_trace(go.Bar(
+                x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'],
+                name='Venta Real', marker_color=colores,
+                text=df_chart['Venta_Actual'].apply(lambda x: f'{x/1e6:.0f}' if x > 0 else ''),
+                textposition='auto'
+            ))
+            fig1.add_trace(go.Scatter(
+                x=df_chart['Mes_Nombre'], y=df_chart['Meta'],
+                name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')
+            ))
+            fig1.update_layout(template="plotly_white", height=400, legend=dict(orientation="h", y=1.1))
+            st.plotly_chart(fig1, use_container_width=True)
+
+        # GRÁFICO 2: COMPARATIVO HISTÓRICO (SIN META)
+        with col_g2:
+            st.subheader(f"📅 Comparativo: {anio_sel} vs {anio_ant}")
+            fig2 = go.Figure()
+            
+            # Año Anterior (Gris)
+            fig2.add_trace(go.Bar(
                 x=df_chart['Mes_Nombre'], y=df_chart['Venta_Anterior'],
                 name=f'{anio_ant}', marker_color='#95a5a6', opacity=0.6
             ))
             
-            # 2. Barra Año Actual (Color principal)
-            fig.add_trace(go.Bar(
+            # Año Actual (Azul)
+            fig2.add_trace(go.Bar(
                 x=df_chart['Mes_Nombre'], y=df_chart['Venta_Actual'],
                 name=f'{anio_sel}', marker_color='#2980b9',
                 text=df_chart['Venta_Actual'].apply(lambda x: f'{x/1e6:.0f}' if x > 0 else ''),
                 textposition='auto'
             ))
             
-            # 3. Línea de Meta
-            fig.add_trace(go.Scatter(
-                x=df_chart['Mes_Nombre'], y=df_chart['Meta'],
-                name='Meta', line=dict(color='#f1c40f', width=3, dash='dot')
-            ))
-            
-            fig.update_layout(
-                title=f"Comparativo Mensual: {anio_sel} vs {anio_ant}", 
-                template="plotly_white", 
-                height=450,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-        with c_vend:
-            st.subheader("🏆 Top Vendedores")
-            rank = df_anio.groupby('Vendedor')['Venta_Neta'].sum().sort_values().tail(10)
-            fig_v = go.Figure(go.Bar(x=rank.values, y=rank.index, orientation='h', text=rank.apply(lambda x: f'{x/1e6:.1f}M'), textposition='auto'))
-            fig_v.update_layout(height=450, margin=dict(l=10, r=10, t=30, b=10))
-            st.plotly_chart(fig_v, use_container_width=True)
+            fig2.update_layout(template="plotly_white", height=400, legend=dict(orientation="h", y=1.1), barmode='group')
+            st.plotly_chart(fig2, use_container_width=True)
+
+        # Top Vendedores (Abajo)
+        st.divider()
+        st.subheader("🏆 Top Vendedores del Año")
+        rank = df_anio.groupby('Vendedor')['Venta_Neta'].sum().sort_values().tail(10)
+        fig_v = go.Figure(go.Bar(x=rank.values, y=rank.index, orientation='h', 
+                                 text=rank.apply(lambda x: f'{x/1e6:.1f}M'), textposition='auto'))
+        fig_v.update_layout(height=400, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig_v, use_container_width=True)
 
 # === PESTAÑA 2: PRODUCTOS ===
 with tab_prod:
@@ -369,6 +384,7 @@ with tab_cli:
         
         st.divider()
         
+        # Descargas
         st.subheader("📥 Descargar Reportes")
         col_d1, col_d2, col_d3 = st.columns(3)
         
@@ -415,7 +431,7 @@ with tab_cli:
             fig_new = px.bar(top_new, x=top_new.values, y=top_new.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#2ecc71'])
             st.plotly_chart(fig_new, use_container_width=True)
 
-# === PESTAÑA 5: VENDEDORES (NUEVA) ===
+# === PESTAÑA 5: VENDEDORES ===
 with tab_vend:
     if not df_main.empty:
         st.header("💼 Análisis de Desempeño Individual")
@@ -441,17 +457,15 @@ with tab_vend:
         perdidos_v = list(cli_v_antes - cli_v_ahora)
         
         kv1, kv2, kv3, kv4 = st.columns(4)
-        kv1.metric(f"Venta Total", f"₡ {venta_ind/1e6:,.1f} M")
+        kv1.metric(f"Venta Total {vendedor_sel}", f"₡ {venta_ind/1e6:,.1f} M")
         kv2.metric("Clientes Activos", len(cli_v_ahora))
         kv3.metric("Ticket Promedio", f"₡ {ticket_ind:,.0f}")
         kv4.metric("Clientes en Riesgo", len(perdidos_v), delta=-len(perdidos_v), delta_color="inverse")
         
         st.divider()
         
-        # Botones Descarga Vendedor
         col_dv1, col_dv2 = st.columns(2)
         with col_dv1:
-            # Descarga Detalle Ventas del Vendedor
             excel_vend = convert_df_to_excel(df_v_anio[['invoice_date', 'name', 'Cliente', 'Venta_Neta']])
             st.download_button(f"📥 Descargar Ventas {vendedor_sel}", data=excel_vend, file_name=f"Ventas_{vendedor_sel}_{anio_v_sel}.xlsx")
             
@@ -464,24 +478,4 @@ with tab_vend:
 
         st.divider()
         
-        col_v_top, col_v_lost = st.columns(2)
-        
-        with col_v_top:
-            st.subheader(f"🌟 Mejores Clientes")
-            if not df_v_anio.empty:
-                top_cli_v = df_v_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-                fig_vt = px.bar(top_cli_v, x=top_cli_v.values, y=top_cli_v.index, orientation='h', text_auto='.2s', color=top_cli_v.values)
-                st.plotly_chart(fig_vt, use_container_width=True)
-            else:
-                st.info("Sin ventas registradas en este periodo.")
-                
-        with col_v_lost:
-            st.subheader("⚠️ Cartera Perdida")
-            if perdidos_v:
-                df_lost_v = df_v_ant[df_v_ant['Cliente'].isin(perdidos_v)]
-                top_lost_v = df_lost_v.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-                fig_vl = px.bar(top_lost_v, x=top_lost_v.values, y=top_lost_v.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])
-                fig_vl.update_layout(xaxis_title="Monto Comprado Año Anterior")
-                st.plotly_chart(fig_vl, use_container_width=True)
-            else:
-                st.success(f"Excelente retención.")
+        col_v_top, col_v_lost = st.columns
