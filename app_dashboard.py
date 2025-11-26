@@ -33,6 +33,7 @@ except Exception:
 
 # --- 3. FUNCIONES UTILITARIAS ---
 def convert_df_to_excel(df):
+    """Convierte DataFrame a Excel en memoria"""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Datos')
@@ -56,7 +57,6 @@ def cargar_datos_generales():
             ['company_id', '=', COMPANY_ID]
         ]
         
-        # Nota: 'id' viene implícito en el read
         campos = ['name', 'invoice_date', 'amount_untaxed_signed', 'partner_id', 'invoice_user_id']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'read', [ids], {'fields': campos})
@@ -127,7 +127,6 @@ def cargar_detalle_productos():
             ['display_type', '=', 'product'],
             ['move_id.move_type', 'in', ['out_invoice', 'out_refund']]
         ]
-        # CLAVE: Traemos 'move_id' para cruzar con la factura
         campos = ['date', 'product_id', 'credit', 'debit', 'quantity', 'name', 'move_id']
         
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio])
@@ -136,7 +135,6 @@ def cargar_detalle_productos():
         df = pd.DataFrame(registros)
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'])
-            # Extraemos el ID numérico de la factura padre
             df['ID_Factura'] = df['move_id'].apply(lambda x: x[0] if x else 0)
             df['ID_Producto'] = df['product_id'].apply(lambda x: x[0] if x else 0)
             df['Producto'] = df['product_id'].apply(lambda x: x[1] if x else "Otros")
@@ -252,6 +250,7 @@ with tab_kpis:
 
         st.divider()
         
+        # Botón Descarga
         col_down, _ = st.columns([1, 4])
         with col_down:
             excel_data = convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Provincia', 'Categoria_Cliente', 'Vendedor', 'Venta_Neta']])
@@ -350,12 +349,9 @@ with tab_prod:
             
             df_show = df_p_anio if tipo_ver == "Todos" else df_p_anio[df_p_anio['Tipo'] == tipo_ver]
             top_prod = df_show.groupby('Producto')[['Venta_Neta', 'quantity']].sum().reset_index()
-            
             col_orden = 'Venta_Neta' if metrica_prod == "Monto (₡)" else 'quantity'
             color_scale = 'Viridis' if metrica_prod == "Monto (₡)" else 'Bluyl'
-            
             top_10 = top_prod.sort_values(col_orden, ascending=False).head(10).sort_values(col_orden, ascending=True)
-            
             fig_bar = px.bar(top_10, x=col_orden, y='Producto', orientation='h', text_auto='.2s', color=col_orden, color_continuous_scale=color_scale)
             fig_bar.update_layout(height=350, xaxis_title=metrica_prod, yaxis_title="")
             st.plotly_chart(fig_bar, use_container_width=True)
@@ -368,11 +364,9 @@ with tab_inv:
         
         df_stock_real = df_cat[df_cat['Stock'] > 0].copy()
         ids_vendidos = set(df_prod[df_prod['date'].dt.year == anio_hueso]['ID_Producto'].unique())
-        
         df_zombies = df_stock_real[~df_stock_real['ID_Producto'].isin(ids_vendidos)].copy()
         df_zombies = df_zombies[df_zombies['create_date'].dt.year < anio_hueso]
         df_zombies = df_zombies[df_zombies['Tipo'] == 'Almacenable']
-        
         df_zombies = df_zombies.sort_values('Valor_Inventario', ascending=False)
         total_atrapado = df_zombies['Valor_Inventario'].sum()
         
@@ -422,17 +416,24 @@ with tab_cli:
         
         # Descargas
         col_d1, col_d2, col_d3 = st.columns(3)
-        
         df_top_all = df_c_anio.groupby(['Cliente', 'Provincia', 'Zona_Comercial'])['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
         excel_top = convert_df_to_excel(df_top_all)
         col_d1.download_button("📂 Ranking Completo", data=excel_top, file_name=f"Ranking_Clientes_{anio_c_sel}.xlsx")
         
-        # Churn
         df_c_ant = df_main[df_main['invoice_date'].dt.year == (anio_c_sel - 1)]
         cli_antes = set(df_c_ant[df_c_ant['Venta_Neta'] > 0]['Cliente'])
         cli_ahora = set(df_c_anio[df_c_anio['Venta_Neta'] > 0]['Cliente'])
         lista_perdidos = list(cli_antes - cli_ahora)
         lista_nuevos = list(cli_ahora - cli_antes)
+        
+        monto_perdido = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)]['Venta_Neta'].sum() if lista_perdidos else 0
+        monto_nuevo = df_c_anio[df_c_anio['Cliente'].isin(lista_nuevos)]['Venta_Neta'].sum() if lista_nuevos else 0
+        
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Clientes Activos", len(cli_ahora))
+        k2.metric("Clientes Nuevos", len(lista_nuevos))
+        k3.metric("Venta de Nuevos", f"₡ {monto_nuevo/1e6:,.1f} M")
+        k4.metric("Venta Perdida (Churn)", f"₡ {monto_perdido/1e6:,.1f} M", delta=-len(lista_perdidos), delta_color="inverse")
             
         if lista_perdidos:
             df_lost_all = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
@@ -541,7 +542,6 @@ with tab_det:
     if not df_main.empty:
         st.header("🔍 Radiografía Individual")
         
-        # Buscador Inteligente
         clientes_todos = sorted(df_main['Cliente'].unique())
         cliente_sel = st.selectbox("Escribe para buscar cliente:", clientes_todos, index=None, placeholder="Ej: Corporación...")
         
@@ -574,17 +574,23 @@ with tab_det:
                 metrica_cli = st.radio("Ver por:", ["Monto", "Cantidad"], horizontal=True, key="metrica_cli", label_visibility="collapsed")
                 
                 if not df_prod.empty:
-                    # CRUCE: Filtramos las líneas de productos que pertenecen a las facturas de este cliente
-                    ids_facturas = df_cli['id'].tolist() # Obtenemos IDs de facturas del cliente
+                    # CRUCE REAL: Usamos ID de la Factura (move_id)
+                    ids_facturas = df_cli['id'].tolist() # Lista de IDs de factura de este cliente
                     
-                    # Filtramos df_prod donde 'ID_Factura' (que es el move_id) esté en la lista
+                    # Filtramos productos que pertenezcan a esas facturas
                     df_prod_cli = df_prod[df_prod['ID_Factura'].isin(ids_facturas)]
                     
                     if not df_prod_cli.empty:
                         col_orden = 'Venta_Neta' if metrica_cli == "Monto" else 'quantity'
-                        top_p_cli = df_prod_cli.groupby('Producto')[['Venta_Neta', 'quantity']].sum().sort_values(col_orden, ascending=False).head(10).sort_values(col_orden, ascending=True)
+                        top_p_cli = df_prod_cli.groupby('Producto')[[col_orden]].sum().sort_values(col_orden, ascending=False).head(10).sort_values(col_orden, ascending=True)
                         
                         fig_p = px.bar(top_p_cli, x=col_orden, y=top_p_cli.index, orientation='h', text_auto='.2s', color=col_orden)
                         st.plotly_chart(fig_p, use_container_width=True)
+                        
+                        # Botón Descarga Historial Productos
+                        st.markdown("##### 📥")
+                        df_export_hist = df_prod_cli.groupby(['date', 'Producto'])[['quantity', 'Venta_Neta']].sum().reset_index().sort_values('date', ascending=False)
+                        excel_hist = convert_df_to_excel(df_export_hist)
+                        st.download_button("Descargar Historial Productos", data=excel_hist, file_name=f"Historial_Productos_{cliente_sel}.xlsx")
                     else:
-                        st.info("No hay detalle de productos disponible (o están fuera del rango de fechas).")
+                        st.info("No hay detalle de productos (fuera de rango o sin datos).")
