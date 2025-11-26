@@ -51,8 +51,8 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # --- IDs CONTABLES EXACTOS ---
-    IDS_INGRESOS = [580, 384] # 580: Venta Bienes, 384: Servicios
+    # --- IDs CONTABLES CONFIGURADOS ---
+    IDS_INGRESOS = [580, 384] # Ventas
     
     ID_WIP = 503
     ID_PROVISION_PROY = 504
@@ -61,7 +61,8 @@ try:
     ID_AJUSTES_INV = 395
     ID_COSTO_RETAIL = 76 
     
-    TODOS_LOS_IDS = IDS_INGRESOS + [ID_WIP, ID_PROVISION_PROY, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_AJUSTES_INV, ID_COSTO_RETAIL]
+    # IMPORTANTE: Si hay cuentas nuevas (como Inventario en Tránsito), agrégalas aquí para que bajen
+    # En la V3.7 bajamos TODO lo que tenga analítica para diagnosticar, luego filtramos en memoria.
     
 except Exception:
     st.error("❌ Error: No encuentro el archivo .streamlit/secrets.toml")
@@ -227,24 +228,28 @@ def cargar_pnl_contable(anio):
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        dominio_pnl = [['account_id', 'in', TODOS_LOS_IDS], 
-                       ['date', '>=', f'{anio}-01-01'], 
-                       ['date', '<=', f'{anio}-12-31'], 
-                       ['company_id', '=', COMPANY_ID], 
-                       ['parent_state', '=', 'posted'], 
-                       ['analytic_distribution', '!=', False]]
+        # V3.7: Traemos TODO lo que tenga analítica, sin filtrar cuentas al inicio
+        # Esto es para diagnosticar qué cuentas están llegando realmente.
+        dominio_pnl = [
+            ['date', '>=', f'{anio}-01-01'], 
+            ['date', '<=', f'{anio}-12-31'], 
+            ['company_id', '=', COMPANY_ID], 
+            ['parent_state', '=', 'posted'], 
+            ['analytic_distribution', '!=', False]
+        ]
                        
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
+        # Leemos el nombre de la cuenta contable también (account_id devuelve [id, name])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
         df = pd.DataFrame(registros)
         if not df.empty:
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
+            df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
             
-            # CALCULO DE NETO (Crédito - Débito)
-            # Para Ventas: Crédito > Débito -> Neto Positivo
-            # Para Costos: Débito > Crédito -> Neto Negativo
+            # Saldo Neto
             df['Monto_Neto'] = df['credit'] - df['debit']
             
+            # --- CLASIFICACIÓN V3.7 ---
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -423,7 +428,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v3.6")
+st.title("🚀 Monitor Comercial ALROTEK v3.7")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -625,38 +630,29 @@ with tab_renta:
                 lista_cuentas = sorted(df_temp['Cuenta_Analitica_Nombre'].unique().astype(str))
                 cuentas_sel = st.multiselect("2. Selecciona Analíticas (Opcional):", lista_cuentas, default=lista_cuentas)
             
+            # Filtro principal
             df_filtered = df_pnl[
                 (df_pnl['Plan_Negocio'].isin(planes_sel)) & 
                 (df_pnl['Cuenta_Analitica_Nombre'].isin(cuentas_sel))
             ].copy()
             
             if not df_filtered.empty:
-                # --- CÁLCULO DE TOTALES (CORREGIDO V3.6: SALDO NETO LUEGO ABSOLUTO) ---
-                # Saldo Neto = Crédito - Débito
-                # Para Ventas: Saldo positivo. Para Costos: Saldo negativo.
-                # Aplicamos abs() al FINAL para mostrar siempre positivo en KPI.
-                
                 total_ventas = abs(df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum())
                 total_instalacion = abs(df_filtered[df_filtered['Clasificacion'] == 'Instalación']['Monto_Neto'].sum())
                 total_suministros = abs(df_filtered[df_filtered['Clasificacion'] == 'Suministros']['Monto_Neto'].sum())
                 total_wip = abs(df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum())
                 total_provision = abs(df_filtered[df_filtered['Clasificacion'] == 'Provisión']['Monto_Neto'].sum())
-                
-                # Ajustes mantiene signo (puede ser + o -)
                 total_ajustes = df_filtered[df_filtered['Clasificacion'] == 'Ajustes Inv']['Monto_Neto'].sum()
                 
                 ids_cuentas_analiticas = df_filtered['id_cuenta_analitica'].dropna().unique().tolist()
                 nombres_cuentas_analiticas = df_filtered['Cuenta_Analitica_Nombre'].unique().tolist()
                 
-                # Horas
                 df_horas_detalle = cargar_detalle_horas_estructura(ids_cuentas_analiticas)
                 total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
                 
-                # Inventario
                 df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuentas_analiticas)
                 total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
                 
-                # Compras Pendientes
                 df_compras = cargar_compras_pendientes(ids_cuentas_analiticas)
                 total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
                 
@@ -669,14 +665,12 @@ with tab_renta:
                 elif status_stock == "NO_BODEGA":
                     color_bg = "bg-gray"
                 
-                # --- FILA 1 ---
                 k1, k2, k3, k4 = st.columns(4)
                 with k1: card_kpi("Ventas", total_ventas, "bg-green")
                 with k2: card_kpi("Instalación", total_instalacion, "bg-blue")
                 with k3: card_kpi("Suministros", total_suministros, "bg-orange")
                 with k4: card_kpi("WIP Acumulado", total_wip, "bg-yellow")
                 
-                # --- FILA 2 ---
                 k5, k6, k7, k8 = st.columns(4)
                 with k5: card_kpi("Provisiones", total_provision, "bg-red")
                 with k6: card_kpi("Ajustes Inv.", total_ajustes, "bg-gray")
@@ -701,7 +695,6 @@ with tab_renta:
                 with c_stock:
                     st.markdown("##### 📦 Detalle Inventario / Compras")
                     tab_inv_det, tab_com_det = st.tabs(["Inventario Físico", "Compras Pendientes"])
-                    
                     with tab_inv_det:
                         if not df_stock_sitio.empty:
                             st.dataframe(df_stock_sitio[['pname', 'quantity', 'Valor_Total']], 
@@ -711,7 +704,6 @@ with tab_renta:
                                          }, 
                                          hide_index=True, use_container_width=True)
                         else: st.caption(f"Estado: {status_stock}")
-                    
                     with tab_com_det:
                         if not df_compras.empty:
                             st.dataframe(df_compras, column_config={"Monto_Pendiente": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
@@ -724,6 +716,16 @@ with tab_renta:
                     column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")},
                     use_container_width=True, hide_index=True
                 )
+                
+                # --- NUEVO: TABLA DE DIAGNÓSTICO DE CUENTAS ---
+                with st.expander("🕵️ Diagnóstico de Cuentas (Ver IDs Reales)"):
+                    if not df_pnl.empty:
+                        df_diag = df_pnl[['ID_Cuenta', 'Nombre_Cuenta']].drop_duplicates().sort_values('ID_Cuenta')
+                        st.markdown("Revisa si los IDs de la izquierda coinciden con los configurados en el código.")
+                        st.dataframe(df_diag, hide_index=True, use_container_width=True)
+                    else:
+                        st.write("No hay datos cargados.")
+                
             else: st.warning("Sin datos.")
     else: st.warning("Sin movimientos analíticos.")
 
