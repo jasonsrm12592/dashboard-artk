@@ -355,14 +355,52 @@ with tab_kpis:
 
         c_graf, c_vend = st.columns([2, 1])
         with c_graf:
-            # --- GRÁFICO POR PLAN ANALÍTICO (COMPACTO) ---
-            st.subheader("📊 Ventas por Línea de Negocio")
+           # --- GRÁFICO POR PLAN ANALÍTICO (CORREGIDO) ---
+            st.subheader("📊 Ventas por Plan Analítico")
             if not df_prod.empty:
                 df_lineas = df_prod[df_prod['date'].dt.year == anio_sel].copy()
                 
-                mapa_cuentas = {}
+                # Crear diccionario maestro: { 'ID_Cuenta_String': 'Nombre_Del_Plan' }
+                mapa_planes = {}
                 if not df_analitica.empty:
-                    mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre']))
+                    # Aseguramos que la clave sea string para coincidir con el JSON de Odoo
+                    mapa_planes = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre']))
+                
+                def clasificar_plan_estricto(dist):
+                    """Analiza el diccionario de distribución y busca el Plan Padre"""
+                    if not dist: 
+                        return "Sin Analítica (Retail)" # O "Default" si prefieres agruparlo ahí
+                    try:
+                        # Convertir string seguro a diccionario
+                        d = dist if isinstance(dist, dict) else ast.literal_eval(str(dist))
+                        if not d: return "Sin Analítica (Retail)"
+                        
+                        # Iterar sobre las cuentas encontradas en la línea
+                        # Odoo devuelve {'id_cuenta': porcentaje}
+                        for id_cuenta in d.keys():
+                            nombre_plan = mapa_planes.get(str(id_cuenta))
+                            if nombre_plan: 
+                                return nombre_plan # Devuelve el primer Plan encontrado (Ej: MANTENIMIENTOS)
+                    except: 
+                        pass
+                    return "Analítica Desconocida"
+
+                # Aplicamos la nueva clasificación
+                df_lineas['Plan_Agrupado'] = df_lineas['analytic_distribution'].apply(clasificar_plan_estricto)
+                
+                # Agrupamos y sumamos
+                ventas_linea = df_lineas.groupby('Plan_Agrupado')['Venta_Neta'].sum().reset_index()
+                
+                # Gráfico
+                fig_pie = px.pie(ventas_linea, values='Venta_Neta', names='Plan_Agrupado', hole=0.4, 
+                                 color_discrete_sequence=px.colors.qualitative.Prism)
+                fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=350)
+                st.plotly_chart(fig_pie, use_container_width=True)
+                
+                with st.expander("Ver Detalle por Plan"):
+                    st.dataframe(ventas_linea.sort_values('Venta_Neta', ascending=False).style.format({'Venta_Neta': '₡ {:,.0f}'}), use_container_width=True)
+            else:
+                st.info("Sin datos de productos para generar el gráfico.")
                 
                 # --- VERSIÓN SEGURA DE CLASIFICACIÓN ---
                 def clasificar_linea(dist):
@@ -790,4 +828,5 @@ with tab_det:
                         df_hist = df_prod_cli.groupby(['date', 'Producto'])[['quantity', 'Venta_Neta']].sum().reset_index().sort_values('date', ascending=False)
                         st.download_button("📥 Descargar Historial", data=convert_df_to_excel(df_hist), file_name=f"Historial_{cliente_sel}.xlsx")
                     else: st.info("No hay detalle de productos.")
+
 
