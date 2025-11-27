@@ -54,7 +54,7 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # IDs CONTABLES
+    # --- IDs CONTABLES ---
     IDS_INGRESOS = [58, 384]     
     ID_COSTO_RETAIL = 76         
     ID_COSTO_INSTALACION = 399   
@@ -227,6 +227,7 @@ def cargar_pnl_historico():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
         ids_gastos = models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])
         ids_totales = list(set(TODOS_LOS_IDS + ids_gastos))
         
@@ -243,6 +244,7 @@ def cargar_pnl_historico():
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
             df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
             df['Monto_Neto'] = df['credit'] - df['debit']
+            
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -380,44 +382,35 @@ def cargar_compras_pendientes_v7_json_scanner(ids_cuentas_analiticas, tc_usd):
         return df_filtrado[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
     except Exception: return pd.DataFrame()
 
-# --- NUEVA FUNCIÓN V6.0: FACTURACIÓN ESTIMADA ---
+# --- FUNCIÓN FACTURACIÓN ESTIMADA V6.1 (Por Nombre Texto y x_monto) ---
 @st.cache_data(ttl=900)
 def cargar_facturacion_estimada(ids_projects, tc_usd):
-    """
-    Busca en x_facturas.proyectos vinculados a los IDs de proyecto.
-    Campo de vínculo: x_studio_field_sFPxe (asumimos es M2O a project.project)
-    Campo de estado: x_studio_facturado (Boolean)
-    Campo de monto: x_monto (ASUMIDO, CAMBIAR SI ES OTRO)
-    """
     try:
         if not ids_projects: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Limpieza IDs
         ids_clean = [int(x) for x in ids_projects if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
         
-        # Filtro: Proyecto coincidente + No Facturado
-        dominio = [
-            ['x_studio_field_sFPxe', 'in', ids_clean],
-            ['x_studio_facturado', '=', False]
-        ]
+        # 1. Obtener NOMBRES de proyectos para buscar por texto
+        proyectos_data = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'read', [ids_clean], {'fields': ['name']})
+        nombres_proyectos = [p['name'] for p in proyectos_data if p['name']]
+        if not nombres_proyectos: return pd.DataFrame()
         
-        # LEER CAMPOS (Ajustar 'x_studio_monto' si el nombre real es otro)
-        campos = ['x_name', 'x_studio_monto', 'x_studio_fecha_estimada'] 
+        # 2. Buscar por texto (Primer nombre para simplificar)
+        nombre_buscar = nombres_proyectos[0]
+        dominio = [['x_studio_field_sFPxe', 'ilike', nombre_buscar], ['x_studio_facturado', '=', False]]
         
         ids = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'read', [ids], {'fields': campos})
+        registros = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'read', [ids], {'fields': ['x_name', 'x_monto', 'x_studio_fecha_estimada']})
         
         df = pd.DataFrame(registros)
         if not df.empty:
-            # Convertir USD a CRC (Asumimos que ingresan en USD según indicación)
-            df['Monto_CRC'] = df['x_studio_monto'] * tc_usd
-            df['Hito'] = df['x_name'] if 'x_name' in df.columns else "Hito Sin Nombre"
+            df['Monto_CRC'] = df['x_monto'] * tc_usd
+            df['Hito'] = df['x_name'] if 'x_name' in df.columns else "Hito"
             return df
-            
         return pd.DataFrame()
     except Exception: return pd.DataFrame()
 
@@ -431,7 +424,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v6.0")
+st.title("🚀 Monitor Comercial ALROTEK v6.1")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -954,4 +947,3 @@ with tab_det:
                         df_hist = df_prod_cli.groupby(['date', 'Producto'])[['quantity', 'Venta_Neta']].sum().reset_index().sort_values('date', ascending=False)
                         st.download_button("📥 Descargar Historial", data=convert_df_to_excel(df_hist), file_name=f"Historial_{cliente_sel}.xlsx")
                     else: st.info("No hay detalle de productos.")
-
