@@ -53,14 +53,14 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # --- IDs CONTABLES CONFIRMADOS (PRODUCCIÓN) ---
-    IDS_INGRESOS = [58, 384]     # 58=Bienes, 384=Servicios
-    ID_COSTO_RETAIL = 76         # Costo mercadería
-    ID_COSTO_INSTALACION = 399   # Instalación
-    ID_SUMINISTROS_PROY = 400    # Suministros
-    ID_WIP = 503                 # WIP
-    ID_PROVISION_PROY = 504      # Provisión
-    ID_AJUSTES_INV = 395         # Ajustes
+    # --- IDs CONTABLES (PRODUCCIÓN) ---
+    IDS_INGRESOS = [58, 384]     
+    ID_COSTO_RETAIL = 76         
+    ID_COSTO_INSTALACION = 399   
+    ID_SUMINISTROS_PROY = 400    
+    ID_WIP = 503                 
+    ID_PROVISION_PROY = 504      
+    ID_AJUSTES_INV = 395         
     
     TODOS_LOS_IDS = IDS_INGRESOS + [ID_WIP, ID_PROVISION_PROY, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_AJUSTES_INV, ID_COSTO_RETAIL]
     
@@ -226,15 +226,7 @@ def cargar_pnl_contable(anio):
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
-        dominio_pnl = [
-            ['date', '>=', f'{anio}-01-01'], 
-            ['date', '<=', f'{anio}-12-31'], 
-            ['company_id', '=', COMPANY_ID], 
-            ['parent_state', '=', 'posted'], 
-            ['analytic_distribution', '!=', False]
-        ]
-                       
+        dominio_pnl = [['date', '>=', f'{anio}-01-01'], ['date', '<=', f'{anio}-12-31'], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
         df = pd.DataFrame(registros)
@@ -242,8 +234,6 @@ def cargar_pnl_contable(anio):
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
             df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
             df['Monto_Neto'] = df['credit'] - df['debit']
-            
-            # Clasificación V5
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -254,7 +244,6 @@ def cargar_pnl_contable(anio):
                 if id_acc == ID_AJUSTES_INV: return "Ajustes Inv"
                 if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
                 return "Sin Clasificar"
-                
             df['Clasificacion'] = df.apply(clasificar, axis=1)
             def get_analytic_id(dist):
                 if not dist: return None
@@ -273,11 +262,20 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
         
-        dominio = [['account_id', 'in', ids_clean], ['date', '>=', f'{datetime.now().year}-01-01'], ['employee_id', '!=', False], ['x_studio_tipo_horas_1', '!=', False]]
-        campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name', 'employee_id']
+        # --- FILTRO ACTUALIZADO (V5.2): partner_id = False ---
+        dominio = [
+            ['account_id', 'in', ids_clean],
+            ['date', '>=', f'{datetime.now().year}-01-01'],
+            ['employee_id', '!=', False], 
+            ['x_studio_tipo_horas_1', '!=', False],
+            ['partner_id', '=', False]  # <--- AQUÍ ESTÁ EL CAMBIO SOLICITADO
+        ]
+        
+        campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name', 'employee_id', 'partner_id']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
         
@@ -311,6 +309,7 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
         if ids_analytic_clean:
             try: ids_found = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', ids_analytic_clean]]])
             except: pass
+        
         ids_search = list(set(ids_analytic_clean + ids_projects))
         
         ids_locs_studio = []
@@ -327,11 +326,13 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
         
         ids_locs_final = list(set(ids_locs_studio + ids_locs_name))
         if not ids_locs_final: return pd.DataFrame(), "NO_BODEGA", []
+            
         loc_names_data = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_locs_final], {'fields': ['complete_name']})
         loc_names = [l['complete_name'] for l in loc_names_data]
         
         ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [[['location_id', 'child_of', ids_locs_final], ['company_id', '=', COMPANY_ID]]])
         data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': ['product_id', 'quantity']})
+        
         df = pd.DataFrame(data_quants)
         if df.empty: return pd.DataFrame(), "NO_STOCK", loc_names
         
@@ -348,68 +349,58 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
     except Exception as e: return pd.DataFrame(), f"ERR: {str(e)}", []
 
 @st.cache_data(ttl=900)
-def cargar_compras_pendientes_v5_json(ids_cuentas_analiticas):
-    """
-    VERSION 5.0: SCANNER JSON PURO
-    Descarga todas las líneas de compra pendientes y busca el ID en el texto analytic_distribution
-    """
+def cargar_compras_pendientes_v6(ids_cuentas_analiticas, ids_projects, tc_usd):
     try:
-        if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Objetivos (IDs Analíticos como String)
-        targets = [str(int(x)) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
-        if not targets: return pd.DataFrame()
+        ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
+        ids_proj_clean = [int(x) for x in ids_projects if pd.notna(x) and x != 0]
         
-        # 1. Descarga Amplia: Compras abiertas recientes
-        dominio = [
+        search_domain = [
+            '|',
+            ['account_analytic_id', 'in', ids_clean], 
+            ['order_id.project_id', 'in', ids_proj_clean],
             ['state', 'in', ['purchase', 'done']], 
-            ['company_id', '=', COMPANY_ID],
-            ['date_order', '>=', '2024-01-01'] # Ajustar año si es necesario
+            ['company_id', '=', COMPANY_ID]
         ]
         
-        # Solo necesitamos ID para iterar rápido o traemos data de una vez?
-        # Traemos data de una vez para filtrar en memoria (más rápido que mil llamadas)
-        ids = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'search', [dominio])
-        campos = ['order_id', 'partner_id', 'name', 'product_qty', 'qty_invoiced', 'price_unit', 'analytic_distribution']
-        registros = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'read', [ids], {'fields': campos})
+        ids = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'search', [search_domain])
+        if not ids and ids_clean:
+             dominio_bruto = [['state', 'in', ['purchase', 'done']], ['company_id', '=', COMPANY_ID], ['date_order', '>=', '2023-01-01']]
+             ids = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'search', [dominio_bruto])
+        
+        registros = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'read', [ids], {'fields': ['order_id', 'partner_id', 'name', 'product_qty', 'qty_invoiced', 'price_unit', 'analytic_distribution', 'currency_id']})
         
         df = pd.DataFrame(registros)
         if df.empty: return pd.DataFrame()
         
-        # 2. Filtrado Python (JSON Scanner)
-        def es_mi_proyecto(dist):
-            if not dist: return False
-            try:
-                # Odoo puede dar string o dict
-                d = dist if isinstance(dist, dict) else ast.literal_eval(str(dist))
-                # Keys son los IDs de cuenta analitica
-                keys = [str(k) for k in d.keys()]
-                # Si alguno de mis targets está en las keys, es mío
-                for t in targets:
-                    if t in keys: return True
-                return False
-            except: return False
+        def es_del_proyecto(row):
+            dist = row.get('analytic_distribution')
+            if dist:
+                try:
+                    d = dist if isinstance(dist, dict) else ast.literal_eval(str(dist))
+                    keys = [str(k) for k in d.keys()]
+                    for target in [str(x) for x in ids_clean]:
+                        if target in keys: return True
+                except: pass
+            return True 
             
-        df['Es_Mio'] = df['analytic_distribution'].apply(es_mi_proyecto)
-        df_filtrado = df[df['Es_Mio']].copy()
+        df['qty_pending'] = df['product_qty'] - df['qty_invoiced']
+        df = df[df['qty_pending'] > 0]
+        if df.empty: return pd.DataFrame()
         
-        if df_filtrado.empty: return pd.DataFrame()
-        
-        # 3. Calculo de Pendiente
-        df_filtrado['qty_pending'] = df_filtrado['product_qty'] - df_filtrado['qty_invoiced']
-        df_filtrado = df_filtrado[df_filtrado['qty_pending'] > 0]
-        
-        if df_filtrado.empty: return pd.DataFrame()
-        
-        df_filtrado['Monto_Pendiente'] = df_filtrado['qty_pending'] * df_filtrado['price_unit']
-        df_filtrado['Proveedor'] = df_filtrado['partner_id'].apply(lambda x: x[1] if x else "-")
-        df_filtrado['OC'] = df_filtrado['order_id'].apply(lambda x: x[1] if x else "-")
-        
-        return df_filtrado[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
+        def get_monto_local(row):
+            monto_original = row['qty_pending'] * row['price_unit']
+            moneda = row['currency_id'][1] if row['currency_id'] else "CRC"
+            if moneda == 'USD': return monto_original * tc_usd
+            return monto_original
 
+        df['Monto_Pendiente'] = df.apply(get_monto_local, axis=1)
+        df['Proveedor'] = df['partner_id'].apply(lambda x: x[1] if x else "-")
+        df['OC'] = df['order_id'].apply(lambda x: x[1] if x else "-")
+        return df[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
     except Exception: return pd.DataFrame()
 
 def cargar_metas():
@@ -422,7 +413,12 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v5.0")
+st.title("🚀 Monitor Comercial ALROTEK v5.2")
+
+with st.sidebar:
+    st.header("⚙️ Configuración")
+    tc_usd = st.number_input("Tipo de Cambio (USD -> CRC)", value=515, min_value=1)
+    st.info(f"Usando TC: ₡{tc_usd}")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -628,11 +624,22 @@ with tab_renta:
             
             ids_seleccionados = [id_c for id_c, nombre in mapa_nombres.items() if nombre in cuentas_sel_nombres]
             
+            # Buscar Proyectos ID para compras (Bridge)
+            ids_projects = []
+            if ids_seleccionados:
+                try:
+                    common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+                    uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+                    models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+                    ids_found = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', ids_seleccionados]]])
+                    ids_projects = ids_found
+                except: pass
+
             df_filtered = pd.DataFrame()
             if not df_pnl.empty:
                 df_filtered = df_pnl[df_pnl['id_cuenta_analitica'].isin(ids_seleccionados)].copy()
             
-            # --- CALCULOS ---
+            # --- CALCULOS (V5.1) ---
             total_ventas = 0
             total_instalacion = 0
             total_suministros = 0
@@ -643,16 +650,22 @@ with tab_renta:
             total_otros = 0
 
             if not df_filtered.empty:
+                # FILTRO ANTI-DUPLICIDAD: Excluir asientos de "Hora" o "Timesheet" en WIP/Instalación
+                # Asumimos que la descripción del asiento contable (name) contiene "Hora" si viene de nómina
+                mask_no_horas = ~df_filtered['name'].astype(str).str.contains("Hora|Timesheet|Nómina", case=False, na=False)
+                
+                df_wip_clean = df_filtered[(df_filtered['Clasificacion'] == 'WIP') & mask_no_horas]
+                df_inst_clean = df_filtered[(df_filtered['Clasificacion'] == 'Instalación') & mask_no_horas]
+
                 total_ventas = abs(df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum())
-                total_instalacion = abs(df_filtered[df_filtered['Clasificacion'] == 'Instalación']['Monto_Neto'].sum())
+                total_instalacion = abs(df_inst_clean['Monto_Neto'].sum())
                 total_suministros = abs(df_filtered[df_filtered['Clasificacion'] == 'Suministros']['Monto_Neto'].sum())
-                total_wip = abs(df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum())
+                total_wip = abs(df_wip_clean['Monto_Neto'].sum())
                 total_provision = abs(df_filtered[df_filtered['Clasificacion'] == 'Provisión']['Monto_Neto'].sum())
                 total_ajustes = df_filtered[df_filtered['Clasificacion'] == 'Ajustes Inv']['Monto_Neto'].sum()
                 total_costo_retail = abs(df_filtered[df_filtered['Clasificacion'] == 'Costo Retail']['Monto_Neto'].sum())
                 
-            # FILTRO DE "OTROS" (Solo gastos 0.6)
-            if not df_filtered.empty:
+                # Otros (Gastos 0.6)
                 df_otros_filtrado = df_filtered[
                     (df_filtered['Clasificacion'] == 'Sin Clasificar') & 
                     (df_filtered['Nombre_Cuenta'].astype(str).str.startswith('0.6', na=False))
@@ -665,8 +678,7 @@ with tab_renta:
             df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
             total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
             
-            # Compras (V5 - JSON SCANNER)
-            df_compras = cargar_compras_pendientes_v5_json(ids_seleccionados)
+            df_compras = cargar_compras_pendientes_v6(ids_seleccionados, ids_projects, tc_usd)
             total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
             
             txt_bodegas = "Sin ubicación asignada"
@@ -690,7 +702,7 @@ with tab_renta:
             with k5: card_kpi("Provisiones", total_provision, "bg-red")
             with k6: card_kpi("Ajustes Inv.", total_ajustes, "bg-gray")
             with k7: card_kpi("Costo Retail (Mercadería)", total_costo_retail, "bg-orange") 
-            with k8: card_kpi("Otros (Gastos 0.6)", total_otros, "bg-gray")
+            with k8: card_kpi("Otros (Gastos 0.6)", total_otros, "bg-gray", nota="Solo gastos (0.6)")
             
             # --- FILA 3 (3 Cols) ---
             k9, k10, k11 = st.columns(3)
@@ -727,11 +739,7 @@ with tab_renta:
             
             st.divider()
             st.markdown("**Detalle Movimientos Contables (P&L)**")
-            
-            # MOSTRAR TABLA DE OTROS FILTRADA PARA DIAGNÓSTICO
             if not df_filtered.empty:
-                # Solo mostrar en la tabla los que NO han sido clasificados o son 0.6
-                # O mostrar todos para transparencia. Vamos a mostrar todos ordenados por clasificacion.
                 st.dataframe(df_filtered[['date', 'name', 'Nombre_Cuenta', 'Clasificacion', 'Monto_Neto']].sort_values(['Clasificacion', 'date'], ascending=True), column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")}, use_container_width=True, hide_index=True)
             
             # --- DIAGNÓSTICO ---
