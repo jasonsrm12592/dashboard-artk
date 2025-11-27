@@ -3,7 +3,7 @@ import pandas as pd
 import xmlrpc.client
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 import os
 import ast
@@ -181,7 +181,6 @@ def cargar_detalle_productos():
 
 @st.cache_data(ttl=3600)
 def cargar_inventario_general():
-    """Inventario para pestaña Productos"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -204,7 +203,10 @@ def cargar_inventario_general():
 @st.cache_data(ttl=3600)
 def cargar_inventario_baja_rotacion():
     """
-    V7.1: Inventario Baja Rotación (Huesos).
+    V8.1: Rotación Real (Huesos por Falta de Salidas).
+    - Filtra BP/Stock + child_of.
+    - Busca salidas (done) a 'customer' O 'production'.
+    - Calcula días desde última salida.
     """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -218,27 +220,17 @@ def cargar_inventario_baja_rotacion():
             ids_tmpl_kits = [b['product_tmpl_id'][0] for b in data_boms if b['product_tmpl_id']]
         except: ids_tmpl_kits = []
         
-        # 2. Encontrar Ubicación BP/Stock
-        dominio_loc = [
-            ['complete_name', 'ilike', 'BP/Stock'],
-            ['usage', '=', 'internal'],
-            ['company_id', '=', COMPANY_ID]
-        ]
+        # 2. Ubicación BP/Stock
+        dominio_loc = [['complete_name', 'ilike', 'BP/Stock'], ['usage', '=', 'internal'], ['company_id', '=', COMPANY_ID]]
         ids_locs_raiz = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
+        if not ids_locs_raiz: return pd.DataFrame(), "❌ No se encontró 'BP/Stock'."
         
-        if not ids_locs_raiz: 
-            return pd.DataFrame(), "❌ No se encontró ubicación 'BP/Stock'."
-            
         info_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_locs_raiz], {'fields': ['complete_name']})
         nombres_bodegas = [l['complete_name'] for l in info_locs]
 
-        # 3. Buscar Quants
-        dominio_quant = [
-            ['location_id', 'child_of', ids_locs_raiz], 
-            ['quantity', '>', 0],
-            ['company_id', '=', COMPANY_ID]
-        ]
-        campos_quant = ['product_id', 'quantity', 'location_id', 'in_date', 'create_date']
+        # 3. Obtener Stock Actual
+        dominio_quant = [['location_id', 'child_of', ids_locs_raiz], ['quantity', '>', 0], ['company_id', '=', COMPANY_ID]]
+        campos_quant = ['product_id', 'quantity', 'location_id']
         
         ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
         data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': campos_quant})
@@ -246,41 +238,62 @@ def cargar_inventario_baja_rotacion():
         df = pd.DataFrame(data_quants)
         if df.empty: return pd.DataFrame(), f"Bodegas ({nombres_bodegas}) vacías."
         
-        # 4. Procesamiento
         df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
         df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desc.")
         df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "-")
         
-        # --- FECHAS BLINDADAS ---
-        df['Fecha_Base'] = pd.to_datetime(df['in_date'], errors='coerce')
-        df['Fecha_Creacion'] = pd.to_datetime(df['create_date'], errors='coerce')
-        df['Fecha_Referencia'] = df['Fecha_Base'].fillna(df['Fecha_Creacion'])
-        df['Fecha_Referencia'] = df['Fecha_Referencia'].fillna(pd.Timestamp('2020-01-01'))
-        
-        # 5. Traer Costos
-        ids_prods = df['pid'].unique().tolist()
-        prod_details = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'product_tmpl_id']})
+        # 4. Enriquecer con Costos y Kits
+        ids_prods_stock = df['pid'].unique().tolist()
+        prod_details = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods_stock], {'fields': ['standard_price', 'product_tmpl_id']})
         df_prod_info = pd.DataFrame(prod_details)
         df_prod_info['Costo'] = df_prod_info['standard_price']
         df_prod_info['tmpl_id'] = df_prod_info['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
         
         df = pd.merge(df, df_prod_info[['id', 'Costo', 'tmpl_id']], left_on='pid', right_on='id', how='left')
-        
-        if ids_tmpl_kits:
-            df = df[~df['tmpl_id'].isin(ids_tmpl_kits)]
-        
+        if ids_tmpl_kits: df = df[~df['tmpl_id'].isin(ids_tmpl_kits)]
         df['Valor'] = df['quantity'] * df['Costo']
 
-        # 6. AGRUPAR
+        # 5. BUSCAR SALIDAS RECIENTES (Últimos 365 días)
+        # Destino: Cliente O Producción
+        fecha_corte = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+        dominio_moves = [
+            ['product_id', 'in', ids_prods_stock],
+            ['state', '=', 'done'],
+            ['date', '>=', fecha_corte],
+            ['location_dest_id.usage', 'in', ['customer', 'production']] # <--- CAMBIO CLAVE
+        ]
+        
+        ids_moves = models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'search', [dominio_moves])
+        data_moves = models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'read', [ids_moves], {'fields': ['product_id', 'date']})
+        
+        df_moves = pd.DataFrame(data_moves)
+        
+        mapa_ult_salida = {}
+        if not df_moves.empty:
+            df_moves['pid'] = df_moves['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
+            df_moves['date'] = pd.to_datetime(df_moves['date'])
+            mapa_ult_salida = df_moves.groupby('pid')['date'].max().to_dict()
+            
+        # 6. Calcular Días Sin Salida
+        def calc_dias(row):
+            pid = row['pid']
+            if pid in mapa_ult_salida:
+                ultima = mapa_ult_salida[pid]
+                return (pd.Timestamp.now() - ultima).days
+            else:
+                return 366 # Más de un año (Hueso seguro)
+
+        df['Dias_Sin_Salida'] = df.apply(calc_dias, axis=1)
+
+        # 7. Agrupar final
         df_agrupado = df.groupby(['Producto']).agg({
             'quantity': 'sum',
             'Valor': 'sum',
-            'Fecha_Referencia': 'max',
+            'Dias_Sin_Salida': 'min', 
             'Ubicacion': lambda x: ", ".join(sorted(set(str(v) for v in x if v)))
         }).reset_index()
         
-        df_agrupado['Dias_En_Bodega'] = (pd.Timestamp.now() - df_agrupado['Fecha_Referencia']).dt.days
-        df_huesos = df_agrupado.sort_values('Dias_En_Bodega', ascending=False)
+        df_huesos = df_agrupado.sort_values('Dias_Sin_Salida', ascending=False)
         
         return df_huesos, f"Filtro: {', '.join(nombres_bodegas)}"
 
@@ -494,7 +507,6 @@ def cargar_facturacion_estimada_v2(ids_projects, tc_usd):
     except Exception: return pd.DataFrame()
 
 def cargar_metas():
-    """Función restaurada V7.2"""
     if os.path.exists("metas.xlsx"):
         df = pd.read_excel("metas.xlsx")
         df['Mes'] = pd.to_datetime(df['Mes'])
@@ -504,7 +516,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v7.3")
+st.title("🚀 Monitor Comercial ALROTEK v8.1")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -828,44 +840,42 @@ with tab_inv:
     with st.spinner("Calculando rotación..."):
         df_huesos, msg_status = cargar_inventario_baja_rotacion()
     
-    st.subheader("📦 Análisis de Baja Rotación")
+    st.subheader("📦 Análisis de Baja Rotación (Huesos)")
     
     if "Error" in msg_status or "No se encontró" in msg_status:
         st.error(msg_status)
     else:
         st.success(msg_status)
     
-    # MOVER SLIDER ARRIBA PARA QUE SEA DINÁMICO
-    dias_min = st.slider("Filtrar por días mínimos de antigüedad:", 0, 720, 365)
+    # CONTROL DE FILTRO (ARRIBA)
+    dias_min = st.slider("Días sin Salidas (Mínimo):", 0, 720, 365)
     
     if not df_huesos.empty:
-        # APLICAR FILTRO PRIMERO
-        df_show = df_huesos[df_huesos['Dias_En_Bodega'] >= dias_min]
+        # FILTRAR
+        df_show = df_huesos[df_huesos['Dias_Sin_Salida'] >= dias_min]
         
-        # CALCULAR KPIs SOBRE LO FILTRADO
         total_atrapado = df_show['Valor'].sum()
-        criticos = df_show[df_show['Dias_En_Bodega'] > 365] # Referencia visual
+        criticos = df_show[df_show['Dias_Sin_Salida'] > 365]
         
         m1, m2, m3 = st.columns(3)
-        m1.metric(f"Capital en Riesgo (>{dias_min} días)", f"₡ {total_atrapado/1e6:,.1f} M")
-        m2.metric("Items Sin Rotación", len(df_show))
+        m1.metric(f"Capital Estancado (>{dias_min} días)", f"₡ {total_atrapado/1e6:,.1f} M")
+        m2.metric("Items Sin Salida", len(df_show))
         m3.metric("Huesos Críticos (>1 año)", len(criticos), delta_color="inverse")
         
         st.divider()
         
         st.dataframe(
-            df_show[['Producto', 'Ubicacion', 'quantity', 'Dias_En_Bodega', 'Valor']],
+            df_show[['Producto', 'Ubicacion', 'quantity', 'Dias_Sin_Salida', 'Valor']],
             column_config={
                 "Valor": st.column_config.NumberColumn(format="₡ %.2f"),
                 "quantity": st.column_config.NumberColumn("Cant."),
-                "Dias_En_Bodega": st.column_config.ProgressColumn("Días Quieto", min_value=0, max_value=720, format="%d días"),
-                "Fecha_Referencia": st.column_config.DateColumn("Fecha Ingreso")
+                "Dias_Sin_Salida": st.column_config.ProgressColumn("Días Sin Venta", min_value=0, max_value=720, format="%d días"),
             },
             use_container_width=True,
             hide_index=True
         )
     else:
-        st.info("No hay stock disponible con los criterios seleccionados.")
+        st.info(f"Información: {msg_status}")
 
 # === PESTAÑA 5: CARTERA ===
 with tab_cx:
