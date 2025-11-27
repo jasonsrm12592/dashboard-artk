@@ -256,28 +256,23 @@ def cargar_pnl_contable(anio):
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=900)
-def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
+def cargar_detalle_horas_estructura(ids_cuentas_analiticas, anio):
     """
-    Carga horas filtrando por MES ACTUAL y asegura que sean de empleados.
+    V5.7: Filtro de horas ajustado al AÑO seleccionado, no solo mes actual.
     """
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
         
-        # CALCULO DE FECHAS (Mes en Curso)
-        hoy = datetime.now()
-        inicio_mes = hoy.replace(day=1).strftime('%Y-%m-%d')
-        # Filtramos desde el 1ro del mes actual en adelante
-        
+        # RANGO DE FECHA: AÑO SELECCIONADO COMPLETO
         dominio = [
             ['account_id', 'in', ids_clean],
-            ['date', '>=', inicio_mes], # Inicio Mes Actual
-            ['date', '<=', hoy.strftime('%Y-%m-%d')], # Hasta Hoy
+            ['date', '>=', f'{anio}-01-01'], 
+            ['date', '<=', f'{anio}-12-31'],
             ['employee_id', '!=', False], 
             ['x_studio_tipo_horas_1', '!=', False]
         ]
@@ -310,7 +305,6 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
         ids_analytic_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         ids_projects = []
         if ids_analytic_clean:
@@ -398,7 +392,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v5.5")
+st.title("🚀 Monitor Comercial ALROTEK v5.7")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -616,16 +610,12 @@ with tab_renta:
             total_otros = 0
 
             if not df_filtered.empty:
-                # FILTRO ANTI-DUPLICIDAD: Excluir asientos de "Hora" o "Timesheet" en WIP/Instalación
-                mask_no_horas = ~df_filtered['name'].astype(str).str.contains("Hora|Timesheet|Nómina", case=False, na=False)
+                # V5.7: ELIMINADO FILTRO DE HORAS EN WIP A PETICIÓN
                 
-                df_wip_clean = df_filtered[(df_filtered['Clasificacion'] == 'WIP') & mask_no_horas]
-                df_inst_clean = df_filtered[(df_filtered['Clasificacion'] == 'Instalación') & mask_no_horas]
-
                 total_ventas = abs(df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum())
-                total_instalacion = abs(df_inst_clean['Monto_Neto'].sum())
+                total_instalacion = abs(df_filtered[df_filtered['Clasificacion'] == 'Instalación']['Monto_Neto'].sum())
                 total_suministros = abs(df_filtered[df_filtered['Clasificacion'] == 'Suministros']['Monto_Neto'].sum())
-                total_wip = abs(df_wip_clean['Monto_Neto'].sum())
+                total_wip = abs(df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum()) # <--- WIP PURO
                 total_provision = abs(df_filtered[df_filtered['Clasificacion'] == 'Provisión']['Monto_Neto'].sum())
                 total_ajustes = df_filtered[df_filtered['Clasificacion'] == 'Ajustes Inv']['Monto_Neto'].sum()
                 total_costo_retail = abs(df_filtered[df_filtered['Clasificacion'] == 'Costo Retail']['Monto_Neto'].sum())
@@ -637,7 +627,7 @@ with tab_renta:
                 ]
                 total_otros = abs(df_otros_filtrado['Monto_Neto'].sum())
 
-            df_horas_detalle = cargar_detalle_horas_estructura(ids_seleccionados)
+            df_horas_detalle = cargar_detalle_horas_estructura(ids_seleccionados, anio_r_sel)
             total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
             
             df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
@@ -674,17 +664,22 @@ with tab_renta:
             k9, k10, k11 = st.columns(3)
             with k9: card_kpi("Inventario Sitio", total_stock_sitio, color_bg, nota=txt_bodegas)
             with k10: card_kpi("Compras Pendientes", total_compras_pendientes, "bg-teal")
-            with k11: card_kpi(f"Costo Horas (Mes Actual)", total_horas_ajustado, "bg-blue")
+            with k11: card_kpi("Costo Horas (Acumulado)", total_horas_ajustado, "bg-blue")
             
             st.divider()
             
             c_horas, c_stock = st.columns(2)
             with c_horas:
-                st.markdown("##### 🕒 Desglose de Horas")
+                st.markdown("##### 🕒 Desglose de Horas (Shadow Cost)")
                 if not df_horas_detalle.empty:
                     resumen_horas = df_horas_detalle.groupby(['Tipo_Hora', 'Multiplicador'])[['Horas', 'Costo']].sum().reset_index()
                     st.dataframe(resumen_horas, column_config={"Costo": st.column_config.NumberColumn(format="₡ %.2f"), "Multiplicador": st.column_config.NumberColumn(format="x %.1f")}, hide_index=True, use_container_width=True)
-                else: st.caption("Sin registros este mes.")
+                    
+                    with st.expander("🕵️ Auditoría Detallada de Horas"):
+                        df_audit = df_horas_detalle[['date', 'Empleado', 'name', 'Tipo_Hora', 'Horas', 'Costo']].sort_values('date', ascending=False)
+                        st.dataframe(df_audit, use_container_width=True)
+                        st.download_button("📥 Descargar", data=convert_df_to_excel(df_audit), file_name="Auditoria_Horas.xlsx")
+                else: st.caption("Sin registros.")
             
             with c_stock:
                 st.markdown("##### 📦 Detalle Inventario / Compras")
