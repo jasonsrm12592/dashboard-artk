@@ -88,29 +88,50 @@ def card_kpi(titulo, valor, color_class, nota=""):
     </div>
     """, unsafe_allow_html=True)
 
-# --- 4. FUNCIONES DE CARGA ---
-
-@st.cache_data(ttl=900) 
-def cargar_datos_generales():
+@st.cache_data(ttl=900)
+def cargar_detalle_horas_estructura(ids_cuentas_analiticas, anio):
+    """
+    Carga horas filtrando basura (Materiales/Facturas) y trae nombres de empleados.
+    CORRECCIÓN V5.4: Quitamos filtro partner_id para ver horas facturables y usamos año dinámico.
+    """
     try:
+        if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
-        if not uid: return None
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        dominio = [['move_type', 'in', ['out_invoice', 'out_refund']], ['state', '=', 'posted'], ['invoice_date', '>=', '2021-01-01'], ['company_id', '=', COMPANY_ID]]
-        campos = ['name', 'invoice_date', 'amount_untaxed_signed', 'partner_id', 'invoice_user_id']
-        ids = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'read', [ids], {'fields': campos})
+        
+        ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
+        if not ids_clean: return pd.DataFrame()
+        
+        # FILTROS AJUSTADOS:
+        # 1. 'employee_id != False': Garantiza que es una persona (no una factura de proveedor).
+        # 2. Eliminamos 'partner_id = False': Para que aparezcan las horas asignadas al Cliente.
+        dominio = [
+            ['account_id', 'in', ids_clean],
+            ['date', '>=', f'{anio}-01-01'],
+            ['date', '<=', f'{anio}-12-31'],
+            ['employee_id', '!=', False], 
+            ['x_studio_tipo_horas_1', '!=', False] 
+        ]
+        
+        campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name', 'employee_id']
+        ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
+        registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
+        
         df = pd.DataFrame(registros)
         if not df.empty:
-            df['invoice_date'] = pd.to_datetime(df['invoice_date'])
-            df['Mes'] = df['invoice_date'].dt.to_period('M').dt.to_timestamp()
-            df['Mes_Num'] = df['invoice_date'].dt.month
-            df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
-            df['ID_Cliente'] = df['partner_id'].apply(lambda x: x[0] if x else 0)
-            df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
-            df['Venta_Neta'] = df['amount_untaxed_signed']
-            df = df[~df['name'].str.contains("WT-", case=False, na=False)]
+            def limpiar_tipo(val): return str(val) if val else "No Definido"
+            df['Tipo_Hora'] = df['x_studio_tipo_horas_1'].apply(limpiar_tipo)
+            df['Empleado'] = df['employee_id'].apply(lambda x: x[1] if x else "Desconocido")
+            def get_multiplier(tipo):
+                t = tipo.lower()
+                if "doble" in t: return 3.0
+                if "extra" in t: return 1.5
+                return 1.0
+            df['Multiplicador'] = df['Tipo_Hora'].apply(get_multiplier)
+            df['Costo_Base'] = df['amount'].abs()
+            df['Costo'] = df['Costo_Base'] * df['Multiplicador']
+            df['Horas'] = df['unit_amount']
         return df
     except Exception: return pd.DataFrame()
 
@@ -646,7 +667,7 @@ with tab_renta:
                 ]
                 total_otros = abs(df_otros_filtrado['Monto_Neto'].sum())
 
-            df_horas_detalle = cargar_detalle_horas_estructura(ids_seleccionados)
+            df_horas_detalle = cargar_detalle_horas_estructura(ids_seleccionados, anio_r_sel)
             total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
             
             df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
@@ -929,3 +950,4 @@ with tab_det:
                         df_hist = df_prod_cli.groupby(['date', 'Producto'])[['quantity', 'Venta_Neta']].sum().reset_index().sort_values('date', ascending=False)
                         st.download_button("📥 Descargar Historial", data=convert_df_to_excel(df_hist), file_name=f"Historial_{cliente_sel}.xlsx")
                     else: st.info("No hay detalle de productos.")
+
