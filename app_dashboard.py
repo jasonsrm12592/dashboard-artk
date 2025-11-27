@@ -387,7 +387,7 @@ def cargar_facturacion_estimada(ids_projects, tc_usd):
     Busca en x_facturas.proyectos vinculados a los IDs de proyecto.
     Campo de vínculo: x_studio_field_sFPxe (asumimos es M2O a project.project)
     Campo de estado: x_studio_facturado (Boolean)
-    Campo de monto: x_studio_monto (ASUMIDO, CAMBIAR SI ES OTRO)
+    Campo de monto: x_monto (ASUMIDO, CAMBIAR SI ES OTRO)
     """
     try:
         if not ids_projects: return pd.DataFrame()
@@ -954,3 +954,4 @@ with tab_det:
                         df_hist = df_prod_cli.groupby(['date', 'Producto'])[['quantity', 'Venta_Neta']].sum().reset_index().sort_values('date', ascending=False)
                         st.download_button("📥 Descargar Historial", data=convert_df_to_excel(df_hist), file_name=f"Historial_{cliente_sel}.xlsx")
                     else: st.info("No hay detalle de productos.")
+
