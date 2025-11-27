@@ -10,7 +10,7 @@ import ast
 
 # --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
 st.set_page_config(
-    page_title="Alrotek Monitor v9.5", 
+    page_title="Alrotek Monitor v9.6", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -21,14 +21,14 @@ st.markdown("""
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-    .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
+    .block-container {padding-top: 1rem; padding-bottom: 2rem;}
     
     .kpi-card {
         background-color: white;
         border-radius: 10px;
         padding: 15px;
         margin-bottom: 10px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         border: 1px solid #e0e0e0;
         text-align: center;
         color: #444;
@@ -38,38 +38,37 @@ st.markdown("""
         justify-content: center;
     }
     .kpi-title {
-        font-size: 0.8rem;
+        font-size: 0.85rem;
         text-transform: uppercase;
         letter-spacing: 0.5px;
         color: #7f8c8d;
         margin-bottom: 8px;
-        font-weight: 600;
-        min-height: 30px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        font-weight: 700;
     }
     .kpi-value {
-        font-size: 1.4rem;
-        font-weight: 700;
+        font-size: 1.5rem;
+        font-weight: 800;
         color: #2c3e50;
         margin-bottom: 4px;
     }
     .kpi-note {
-        font-size: 0.7rem;
+        font-size: 0.75rem;
         color: #95a5a6;
     }
     
     /* Bordes de color */
-    .border-green { border-left: 4px solid #27ae60; }
-    .border-orange { border-left: 4px solid #d35400; }
-    .border-yellow { border-left: 4px solid #f1c40f; }
-    .border-blue { border-left: 4px solid #2980b9; }
-    .border-purple { border-left: 4px solid #8e44ad; }
-    .border-red { border-left: 4px solid #c0392b; }
-    .border-teal { border-left: 4px solid #16a085; }
-    .border-cyan { border-left: 4px solid #1abc9c; }
-    .border-gray { border-left: 4px solid #7f8c8d; }
+    .border-green { border-left: 5px solid #27ae60; }
+    .border-orange { border-left: 5px solid #d35400; }
+    .border-yellow { border-left: 5px solid #f1c40f; }
+    .border-blue { border-left: 5px solid #2980b9; }
+    .border-purple { border-left: 5px solid #8e44ad; }
+    .border-red { border-left: 5px solid #c0392b; }
+    .border-teal { border-left: 5px solid #16a085; }
+    .border-cyan { border-left: 5px solid #1abc9c; }
+    .border-gray { border-left: 5px solid #7f8c8d; }
+    
+    /* Clase especial para destacar Meta */
+    .bg-dark-blue { background-color: #f0f8ff; border-left: 5px solid #000080; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -102,11 +101,21 @@ def convert_df_to_excel(df, sheet_name='Datos'):
     return output.getvalue()
 
 def card_kpi(titulo, valor, color_class, nota="", formato="moneda"):
-    if isinstance(valor, (int, float)):
-        if formato == "moneda": val_fmt = f"₡ {valor:,.0f}"
-        elif formato == "numero": val_fmt = f"{valor:,.0f}"
-        else: val_fmt = str(valor)
-    else: val_fmt = valor
+    # Forzar conversión a float si es numérico para evitar errores de formato
+    try:
+        val_float = float(valor)
+        es_numero = True
+    except:
+        es_numero = False
+        val_fmt = str(valor)
+
+    if es_numero:
+        if formato == "moneda":
+            val_fmt = f"₡ {val_float:,.0f}"
+        elif formato == "numero":
+            val_fmt = f"{val_float:,.0f}"
+        else:
+            val_fmt = str(valor)
         
     st.markdown(f"""
     <div class="kpi-card {color_class}">
@@ -123,6 +132,7 @@ def config_plotly(fig):
         font=dict(family="Arial, sans-serif", size=11, color="#333"),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", y=1.1)
     )
     return fig
 
@@ -392,7 +402,7 @@ def cargar_metas():
 
 # --- 5. INTERFAZ ---
 
-st.title("🚀 Alrotek Monitor de Ventas")
+st.title("🚀 Alrotek Monitor v9.6 (FINAL)")
 
 with st.expander("⚙️ Configuración", expanded=True):
     col_conf1, col_conf2 = st.columns(2)
@@ -440,17 +450,16 @@ with tab_kpis:
         
         c1, c2, c3, c4 = st.columns(4)
         with c1: card_kpi("Venta Total", venta, "border-green", f"{delta:+.1f}% vs Anterior")
-        with c2: card_kpi("Meta Anual", meta, "border-cyan", formato="moneda")
+        # --- AQUÍ ESTÁ EL CAMBIO VISUAL DE LA META ---
+        with c2: card_kpi("Meta Anual", meta, "bg-dark-blue", formato="moneda")
         with c3: card_kpi("Cumplimiento", f"{(venta/meta*100) if meta>0 else 0:.1f}%", "border-blue", formato="raw")
         with c4: card_kpi("Ticket Prom.", (venta/df_anio['name'].nunique()) if df_anio['name'].nunique()>0 else 0, "border-purple")
         
         st.divider()
         st.download_button("📥 Descargar", data=convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Provincia', 'Venta_Neta']]), file_name=f"Ventas_{anio_sel}.xlsx")
 
-        # --- SEPARACIÓN VERTICAL TOTAL DE GRÁFICOS ---
-        
-        # 1. Gráfico Meta (ANCHO COMPLETO)
-        st.markdown("### 🎯 Cumplimiento de Meta (Año Seleccionado)")
+        # 1. Gráfico Meta (ANCHO COMPLETO - SEPARADO)
+        st.markdown(f"### 🎯 Cumplimiento de Meta ({anio_sel})")
         v_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
         v_meta = df_metas[df_metas['Anio'] == anio_sel].groupby('Mes_Num')['Meta'].sum().reset_index()
         
@@ -465,8 +474,8 @@ with tab_kpis:
 
         st.divider()
 
-        # 2. Gráfico Comparativo (ANCHO COMPLETO)
-        st.markdown(f"### 🗓️ Comparativo Histórico: {anio_sel} vs {anio_sel-1}")
+        # 2. Gráfico Comparativo (ANCHO COMPLETO - SEPARADO)
+        st.markdown(f"### 🗓️ Comparativo: {anio_sel} vs {anio_sel-1}")
         v_ant_g = df_ant.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
         
         df_gc = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_ant_g, on='Mes_Num', how='left').fillna(0)
