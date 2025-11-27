@@ -24,7 +24,7 @@ hide_st_style = """
                 background-color: #ffffff;
                 padding: 15px 10px;
                 border-radius: 8px;
-                border-left: 5px solid #333; /* Color dinámico se inyecta aquí */
+                border-left: 5px solid #333;
                 box-shadow: 0 4px 6px rgba(0,0,0,0.1);
                 margin-bottom: 15px;
                 text-align: center;
@@ -71,19 +71,6 @@ hide_st_style = """
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
-# MAPA DE COLORES PARA GRÁFICOS (CONSISTENCIA VISUAL)
-COLOR_MAP = {
-    'Venta': '#27ae60',
-    'WIP': '#f1c40f',
-    'Provisión': '#c0392b',
-    'Instalación': '#2980b9',
-    'Suministros': '#f39c12',
-    'Ajustes Inv': '#95a5a6',
-    'Costo Retail': '#d35400',
-    'Otros Gastos': '#7f8c8d',
-    'Sin Clasificar': '#bdc3c7'
-}
-
 # --- 2. CREDENCIALES & CUENTAS ---
 try:
     URL = st.secrets["odoo"]["url"]
@@ -118,7 +105,6 @@ def card_kpi(titulo, valor, border_class, nota="", icon=""):
     if isinstance(valor, str):
         val_fmt = valor
     else:
-        # Formato Millones inteligente
         if abs(valor) >= 1_000_000:
             val_fmt = f"₡ {valor/1e6:,.1f} M"
         else:
@@ -134,7 +120,6 @@ def card_kpi(titulo, valor, border_class, nota="", icon=""):
     st.markdown(html, unsafe_allow_html=True)
 
 # --- 4. FUNCIONES DE CARGA (CORE) ---
-# ... (Mantenemos todas las funciones lógicas v8.2 que ya funcionan) ...
 
 @st.cache_data(ttl=900) 
 def cargar_datos_generales():
@@ -240,68 +225,111 @@ def cargar_inventario_general():
             df['create_date'] = pd.to_datetime(df['create_date'])
             df['Valor_Inventario'] = df['qty_available'] * df['standard_price']
             df.rename(columns={'id': 'ID_Producto', 'name': 'Producto', 'qty_available': 'Stock', 'standard_price': 'Costo', 'default_code': 'Referencia'}, inplace=True)
-            df['tmpl_id'] = df['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
-            if ids_kits: pass # Simplificado
             tipo_map = {'product': 'Almacenable', 'service': 'Servicio', 'consu': 'Consumible'}
             df['Tipo'] = df['detailed_type'].map(tipo_map).fillna('Otro')
+            
+            # Filtro Kits solo para visualizacion si se desea, aqui dejamos todo
         return df
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def cargar_inventario_baja_rotacion():
+    """
+    V8.2: Rotación Real (Huesos).
+    """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
+        # 1. Detectar Kits
         try:
             ids_bom_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
             data_boms = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'read', [ids_bom_kits], {'fields': ['product_tmpl_id']})
             ids_tmpl_kits = [b['product_tmpl_id'][0] for b in data_boms if b['product_tmpl_id']]
         except: ids_tmpl_kits = []
+        
+        # 2. Ubicación BP/Stock
         dominio_loc = [['complete_name', 'ilike', 'BP/Stock'], ['usage', '=', 'internal'], ['company_id', '=', COMPANY_ID]]
         ids_locs_raiz = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
         if not ids_locs_raiz: return pd.DataFrame(), "❌ No se encontró 'BP/Stock'."
+        
         info_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_locs_raiz], {'fields': ['complete_name']})
         nombres_bodegas = [l['complete_name'] for l in info_locs]
+
+        # 3. Obtener Stock Actual
         dominio_quant = [['location_id', 'child_of', ids_locs_raiz], ['quantity', '>', 0], ['company_id', '=', COMPANY_ID]]
         campos_quant = ['product_id', 'quantity', 'location_id']
         ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
         data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': campos_quant})
+        
         df = pd.DataFrame(data_quants)
         if df.empty: return pd.DataFrame(), "Bodega vacía."
+        
         df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
         df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desc.")
         df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "-")
+        
+        # 4. Enriquecer
         ids_prods_stock = df['pid'].unique().tolist()
         prod_details = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods_stock], {'fields': ['standard_price', 'product_tmpl_id', 'detailed_type']})
         df_prod_info = pd.DataFrame(prod_details)
+        
         df_prod_info['Costo'] = df_prod_info['standard_price']
         df_prod_info['tmpl_id'] = df_prod_info['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
+        
         df = pd.merge(df, df_prod_info[['id', 'Costo', 'tmpl_id', 'detailed_type']], left_on='pid', right_on='id', how='left')
+        
         if ids_tmpl_kits: df = df[~df['tmpl_id'].isin(ids_tmpl_kits)]
-        df = df[df['detailed_type'] == 'product']
+        df = df[df['detailed_type'] == 'product'] # SOLO ALMACENABLES
+        
         df['Valor'] = df['quantity'] * df['Costo']
+        
         if df.empty: return pd.DataFrame(), "Sin productos almacenables."
+
+        # 5. BUSCAR SALIDAS RECIENTES (Últimos 365 días)
         fecha_corte = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
         ids_prods_final = df['pid'].unique().tolist()
-        dominio_moves = [['product_id', 'in', ids_prods_final], ['state', '=', 'done'], ['date', '>=', fecha_corte], ['location_dest_id.usage', 'in', ['customer', 'production']]]
+        
+        dominio_moves = [
+            ['product_id', 'in', ids_prods_final],
+            ['state', '=', 'done'],
+            ['date', '>=', fecha_corte],
+            ['location_dest_id.usage', 'in', ['customer', 'production']]
+        ]
+        
         ids_moves = models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'search', [dominio_moves])
         data_moves = models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'read', [ids_moves], {'fields': ['product_id', 'date']})
+        
         df_moves = pd.DataFrame(data_moves)
+        
         mapa_ult_salida = {}
         if not df_moves.empty:
             df_moves['pid'] = df_moves['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
             df_moves['date'] = pd.to_datetime(df_moves['date'])
             mapa_ult_salida = df_moves.groupby('pid')['date'].max().to_dict()
+            
+        # 6. Calcular Días Sin Salida
         def calc_dias(row):
             pid = row['pid']
             if pid in mapa_ult_salida:
                 return (pd.Timestamp.now() - mapa_ult_salida[pid]).days
             return 366 
+
         df['Dias_Sin_Salida'] = df.apply(calc_dias, axis=1)
-        df_agrupado = df.groupby(['Producto']).agg({'quantity': 'sum', 'Valor': 'sum', 'Dias_Sin_Salida': 'min', 'Ubicacion': lambda x: ", ".join(sorted(set(str(v) for v in x if v)))}).reset_index()
+
+        # 7. Agrupar final
+        df_agrupado = df.groupby(['Producto']).agg({
+            'quantity': 'sum',
+            'Valor': 'sum',
+            'Dias_Sin_Salida': 'min', 
+            'Ubicacion': lambda x: ", ".join(sorted(set(str(v) for v in x if v)))
+        }).reset_index()
+        
         df_huesos = df_agrupado.sort_values('Dias_Sin_Salida', ascending=False)
+        
         return df_huesos, f"Filtro: {', '.join(nombres_bodegas)} (Solo Almacenables)"
+
     except Exception as e: return pd.DataFrame(), f"Error: {e}"
 
 @st.cache_data(ttl=3600)
@@ -331,9 +359,16 @@ def cargar_pnl_historico():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
         ids_gastos = models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])
         ids_totales = list(set(TODOS_LOS_IDS + ids_gastos))
-        dominio_pnl = [['account_id', 'in', ids_totales], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]
+        
+        dominio_pnl = [
+            ['account_id', 'in', ids_totales],
+            ['company_id', '=', COMPANY_ID], 
+            ['parent_state', '=', 'posted'], 
+            ['analytic_distribution', '!=', False]
+        ]
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
         df = pd.DataFrame(registros)
@@ -341,6 +376,7 @@ def cargar_pnl_historico():
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
             df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
             df['Monto_Neto'] = df['credit'] - df['debit']
+            
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -513,29 +549,21 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v9.0")
+st.title("🚀 Monitor Comercial ALROTEK v9.2")
 
-# --- BARRA LATERAL ---
 with st.sidebar:
-    # LOGO PLACEHOLDER
     logo_path = "logo.png"
-    if os.path.exists(logo_path):
-        st.image(logo_path, use_container_width=True)
-    else:
-        st.markdown("## 🏢 ALROTEK")
-        st.caption("Sube un archivo 'logo.png' para verlo aquí.")
-        
+    if os.path.exists(logo_path): st.image(logo_path, use_container_width=True)
+    else: st.markdown("## 🏢 ALROTEK")
+    
     st.divider()
     st.header("⚙️ Configuración Global")
     
-    # Filtro AÑO (Global)
     anios_posibles = list(range(datetime.now().year, 2020, -1))
     anio_global = st.selectbox("Año Fiscal:", anios_posibles, index=0)
     
     tc_usd = st.number_input("Tipo de Cambio (USD -> CRC)", value=515, min_value=1)
     st.info(f"Usando TC: ₡{tc_usd}")
-    st.divider()
-    st.caption("v9.0 - Executive Edition")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -564,10 +592,9 @@ with st.spinner('Sincronizando todo...'):
         else:
             df_main['Provincia'] = 'Sin Dato'
 
-# === PESTAÑA 1: GENERAL (REDISEÑADA) ===
+# === PESTAÑA 1: GENERAL ===
 with tab_kpis:
     if not df_main.empty:
-        # Usamos el año global del sidebar
         anio_ant = anio_global - 1
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_global]
         df_ant_data = df_main[df_main['invoice_date'].dt.year == anio_ant]
@@ -583,7 +610,6 @@ with tab_kpis:
         cant_facturas = df_anio['name'].nunique()
         ticket_promedio = (venta / cant_facturas) if cant_facturas > 0 else 0
         
-        # KPIs UNIFICADOS
         k1, k2, k3, k4 = st.columns(4)
         with k1: card_kpi("Venta Total", venta, "border-green", f"{delta_anual:.1f}% vs {anio_ant}", "💰")
         with k2: card_kpi("Meta Anual", meta, "border-gray", f"Falta: {100-cumplimiento:.1f}%", "🎯")
@@ -592,37 +618,74 @@ with tab_kpis:
         
         st.divider()
         
-        col_graf, col_top = st.columns([2, 1])
-        with col_graf:
-            st.markdown("### 📅 Tendencia Mensual")
+        # --- GRAFICOS RESTAURADOS (V9.2) ---
+        col_top_graf, col_top_rank = st.columns([2, 1])
+        
+        with col_top_graf:
+            st.markdown("### 📅 Tendencia vs Meta")
             v_mes_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index()
             v_mes_act.columns = ['Mes_Num', 'Venta_Actual']
             v_metas = metas_filtradas.groupby('Mes_Num')['Meta'].sum().reset_index()
-            
             df_chart = pd.DataFrame({'Mes_Num': range(1, 13)})
             df_chart = pd.merge(df_chart, v_mes_act, on='Mes_Num', how='left').fillna(0)
             df_chart = pd.merge(df_chart, v_metas, on='Mes_Num', how='left').fillna(0)
-            
             nombres_meses = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
             df_chart['Mes'] = df_chart['Mes_Num'].map(nombres_meses)
-            
             fig = go.Figure()
             fig.add_trace(go.Bar(x=df_chart['Mes'], y=df_chart['Venta_Actual'], name='Real', marker_color='#27ae60'))
             fig.add_trace(go.Scatter(x=df_chart['Mes'], y=df_chart['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
             fig.update_layout(template="plotly_white", height=350, margin=dict(l=0,r=0,t=0,b=0))
             st.plotly_chart(fig, use_container_width=True)
             
-        with col_top:
+        with col_top_rank:
             st.markdown("### 🏆 Top Vendedores")
             rank = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index().sort_values('Venta_Neta', ascending=True).tail(8)
             fig_v = px.bar(rank, x='Venta_Neta', y='Vendedor', orientation='h', text_auto='.2s', color_discrete_sequence=['#2980b9'])
             fig_v.update_layout(template="plotly_white", height=350, margin=dict(l=0,r=0,t=0,b=0), xaxis_title=None, yaxis_title=None)
             st.plotly_chart(fig_v, use_container_width=True)
+            
+        # --- NUEVA FILA DE GRAFICOS (RESTORED) ---
+        if not df_prod.empty:
+            st.divider()
+            col_mix1, col_mix2 = st.columns([1, 2])
+            
+            # Preparar datos del Plan
+            df_lineas = df_prod[df_prod['date'].dt.year == anio_global].copy()
+            mapa_planes = {}
+            if not df_analitica.empty:
+                mapa_planes = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre']))
+            
+            def clasificar_plan(dist):
+                if not dist: return "Sin Analítica"
+                try:
+                    d = dist if isinstance(dist, dict) else ast.literal_eval(str(dist))
+                    for k in d.keys():
+                        plan = mapa_planes.get(str(k))
+                        if plan: return plan
+                except: pass
+                return "Otros"
+
+            df_lineas['Plan'] = df_lineas['analytic_distribution'].apply(clasificar_plan)
+            
+            with col_mix1:
+                st.markdown("### 🍰 Mix de Negocio (Planes)")
+                ventas_plan = df_lineas.groupby('Plan')['Venta_Neta'].sum().reset_index()
+                fig_pie = px.pie(ventas_plan, values='Venta_Neta', names='Plan', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig_pie.update_layout(height=350, margin=dict(t=20,b=0,l=0,r=0))
+                st.plotly_chart(fig_pie, use_container_width=True)
+            
+            with col_mix2:
+                st.markdown("### 📶 Evolución por Línea de Negocio")
+                df_lineas['Mes_Nombre'] = df_lineas['date'].dt.strftime('%m-%b')
+                df_lineas['Mes_Num'] = df_lineas['date'].dt.month
+                ventas_mes_plan = df_lineas.groupby(['Mes_Num', 'Mes_Nombre', 'Plan'])['Venta_Neta'].sum().reset_index().sort_values('Mes_Num')
+                fig_stack = px.bar(ventas_mes_plan, x='Mes_Nombre', y='Venta_Neta', color='Plan', title="", color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig_stack.update_layout(height=350, margin=dict(t=20,b=0,l=0,r=0))
+                st.plotly_chart(fig_stack, use_container_width=True)
 
 # === PESTAÑA 2: PRODUCTOS ===
 with tab_prod:
     if not df_prod.empty and not df_cat.empty:
-        # Usamos año global
         df_p_anio = df_prod[df_prod['date'].dt.year == anio_global].copy()
         df_p_anio = pd.merge(df_p_anio, df_cat[['ID_Producto', 'Tipo', 'Referencia']], on='ID_Producto', how='left')
         df_p_anio['Tipo'] = df_p_anio['Tipo'].fillna('Desconocido')
@@ -649,9 +712,8 @@ with tab_prod:
 
 # === PESTAÑA 3: RENTABILIDAD (CONTROL PROJECT) ===
 with tab_renta:
-    # No usa año global (es histórico)
     
-    with st.spinner('Analizando P&L Histórico...'):
+    with st.spinner('Analizando Histórico P&L...'):
         df_pnl = cargar_pnl_historico()
     
     if not df_analitica.empty:
@@ -660,7 +722,7 @@ with tab_renta:
         
         lista_planes = sorted(list(set(mapa_cuentas.values())))
         
-        st.subheader("🕵️ Buscador de Proyectos")
+        st.subheader("🕵️ Buscador de Proyectos (Histórico)")
         c_filt1, c_filt2 = st.columns(2)
         with c_filt1:
             planes_sel = st.multiselect("1. Selecciona Planes:", lista_planes, default=[])
@@ -670,11 +732,10 @@ with tab_renta:
             nombres_cuentas_posibles = [mapa_nombres[id_c] for id_c in ids_cuentas_posibles]
             
             with c_filt2:
-                cuentas_sel_nombres = st.multiselect("2. Selecciona Analíticas:", sorted(nombres_cuentas_posibles), default=sorted(nombres_cuentas_posibles))
+                cuentas_sel_nombres = st.multiselect("2. Selecciona Analíticas (Opcional):", sorted(nombres_cuentas_posibles), default=sorted(nombres_cuentas_posibles))
             
             ids_seleccionados = [id_c for id_c, nombre in mapa_nombres.items() if nombre in cuentas_sel_nombres]
             
-            # IDs de Proyectos (Bridge)
             ids_projects = []
             try:
                 common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -688,7 +749,6 @@ with tab_renta:
             if not df_pnl.empty:
                 df_filtered = df_pnl[df_pnl['id_cuenta_analitica'].isin(ids_seleccionados)].copy()
             
-            # --- CALCULOS ---
             total_ventas = 0; total_instalacion = 0; total_suministros = 0; total_wip = 0; total_provision = 0; total_ajustes = 0; total_costo_retail = 0; total_otros = 0
 
             if not df_filtered.empty:
@@ -699,8 +759,6 @@ with tab_renta:
                 total_provision = abs(df_filtered[df_filtered['Clasificacion'] == 'Provisión']['Monto_Neto'].sum())
                 total_ajustes = df_filtered[df_filtered['Clasificacion'] == 'Ajustes Inv']['Monto_Neto'].sum()
                 total_costo_retail = abs(df_filtered[df_filtered['Clasificacion'] == 'Costo Retail']['Monto_Neto'].sum())
-                
-                # Otros (Gastos 6%)
                 df_otros_filtrado = df_filtered[df_filtered['Clasificacion'] == 'Otros Gastos']
                 total_otros = abs(df_otros_filtrado['Monto_Neto'].sum())
 
@@ -719,8 +777,6 @@ with tab_renta:
             txt_bodegas = "Sin ubicación"
             if status_stock == "OK" or status_stock == "NO_STOCK":
                 txt_bodegas = f"Bodegas: {len(bodegas_encontradas)}"
-            
-            # --- RENDERIZADO CON TARJETAS NUEVAS ---
             
             k1, k2, k3, k4 = st.columns(4)
             with k1: card_kpi("Ventas (Acum)", total_ventas, "border-green", "Ingresos Reales", "💰")
@@ -742,7 +798,6 @@ with tab_renta:
             
             st.divider()
             
-            # --- GRAFICOS DE APOYO ---
             cg1, cg2 = st.columns([1, 1])
             with cg1:
                 st.markdown("##### 📉 Estructura de Costos")
@@ -755,19 +810,9 @@ with tab_renta:
             with cg2:
                 st.markdown("##### 📦 Detalle Inventario")
                 if not df_stock_sitio.empty:
-                    st.dataframe(
-                        df_stock_sitio[['pname', 'quantity', 'Valor_Total']], 
-                        column_config={
-                            "pname": "Producto", 
-                            "Valor_Total": st.column_config.NumberColumn(format="₡ %.2f"),
-                            "quantity": st.column_config.NumberColumn("Cant.")
-                        }, 
-                        hide_index=True, use_container_width=True
-                    )
-                else:
-                    st.info("No hay inventario en sitio.")
+                    st.dataframe(df_stock_sitio[['pname', 'quantity', 'Valor_Total']], hide_index=True, use_container_width=True)
+                else: st.info("No hay inventario en sitio.")
 
-            # --- TABLAS DE DETALLE ---
             with st.expander("📋 Ver Detalle de Compras y Facturación Pendiente"):
                 t1, t2 = st.tabs(["Compras (OC)", "Facturación (Hitos)"])
                 with t1:
@@ -779,7 +824,7 @@ with tab_renta:
 
 # === PESTAÑA 4: INVENTARIO (BAJA ROTACIÓN) ===
 with tab_inv:
-    with st.spinner("Analizando huesos..."):
+    with st.spinner("Calculando rotación..."):
         df_huesos, msg_status = cargar_inventario_baja_rotacion()
     
     col_header, col_filter = st.columns([3, 1])
@@ -790,11 +835,9 @@ with tab_inv:
         dias_min = st.number_input("Días sin Salidas >", min_value=0, value=365, step=30)
     
     if not df_huesos.empty:
-        # FILTRAR
         df_show = df_huesos[df_huesos['Dias_Sin_Salida'] >= dias_min]
-        
         total_atrapado = df_show['Valor'].sum()
-        items_totales = len(df_huesos) # Universo total en bodega
+        items_totales = len(df_huesos) 
         items_hueso = len(df_show)
         
         m1, m2, m3 = st.columns(3)
