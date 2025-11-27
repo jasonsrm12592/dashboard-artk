@@ -786,15 +786,15 @@ with tab_cli:
         c_top, c_loss = st.columns(2)
         with c_top:
             st.subheader("Top 10 Clientes")
-            top_10 = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-            st.plotly_chart(config_plotly(px.bar(top_10, x='Venta_Neta', y=top_10.index, orientation='h', text_auto='.2s')), use_container_width=True)
+            # Se agrega .reset_index() y se usan nombres de columna
+            top_10 = df_c_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True).reset_index()
+            st.plotly_chart(config_plotly(px.bar(top_10, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s')), use_container_width=True)
         with c_loss:
             st.subheader("Top Perdidos (Oportunidad)")
             if lista_perdidos:
-                df_lost = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-                st.plotly_chart(config_plotly(px.bar(df_lost, x='Venta_Neta', y=df_lost.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
-
-# === PESTAÑA 7: VENDEDORES (TODO RESTAURADO) ===
+                df_lost = df_c_ant[df_c_ant['Cliente'].isin(lista_perdidos)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True).reset_index()
+                st.plotly_chart(config_plotly(px.bar(df_lost, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
+# === PESTAÑA 7: VENDEDORES (CORREGIDO) ===
 with tab_vend:
     if not df_main.empty:
         col_v1, col_v2 = st.columns(2)
@@ -821,14 +821,15 @@ with tab_vend:
         c_v_top, c_v_lost = st.columns(2)
         with c_v_top:
             st.subheader("Mejores Clientes")
-            top_cli_v = df_v_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-            st.plotly_chart(config_plotly(px.bar(top_cli_v, x=top_cli_v.values, y=top_cli_v.index, orientation='h', text_auto='.2s')), use_container_width=True)
+            # --- CORRECCIÓN AQUÍ: .reset_index() ---
+            top_cli_v = df_v_anio.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True).reset_index()
+            st.plotly_chart(config_plotly(px.bar(top_cli_v, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s')), use_container_width=True)
         with c_v_lost:
             st.subheader("Cartera Perdida")
             if perdidos_v:
-                df_lost_v = df_v_ant[df_v_ant['Cliente'].isin(perdidos_v)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True)
-                st.plotly_chart(config_plotly(px.bar(df_lost_v, x='Venta_Neta', y=df_lost_v.index, orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
-
+                # --- CORRECCIÓN AQUÍ TAMBIÉN ---
+                df_lost_v = df_v_ant[df_v_ant['Cliente'].isin(perdidos_v)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).head(10).sort_values(ascending=True).reset_index()
+                st.plotly_chart(config_plotly(px.bar(df_lost_v, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
 # === PESTAÑA 8: RADIOGRAFÍA (TODO RESTAURADO) ===
 with tab_det:
     if not df_main.empty:
@@ -857,6 +858,7 @@ with tab_det:
                     ids_facturas = set(df_cli['id'])
                     df_prod_cli = df_prod[df_prod['ID_Factura'].isin(ids_facturas)]
                     col_orden = 'Venta_Neta' if metrica_cli == "Monto" else 'quantity'
-                    top_p = df_prod_cli.groupby('Producto')[[col_orden]].sum().sort_values(col_orden, ascending=False).head(10)
-                    st.plotly_chart(config_plotly(px.bar(top_p, x=col_orden, y=top_p.index, orientation='h', text_auto='.2s')), use_container_width=True)
+                    # Se agrega .reset_index()
+                    top_p = df_prod_cli.groupby('Producto')[[col_orden]].sum().sort_values(col_orden, ascending=False).head(10).reset_index().sort_values(col_orden, ascending=True)
+                    st.plotly_chart(config_plotly(px.bar(top_p, x=col_orden, y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
                     st.download_button("📥 Descargar Historial", data=convert_df_to_excel(df_prod_cli), file_name=f"Historial_{cli_sel}.xlsx")
