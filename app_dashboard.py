@@ -203,10 +203,10 @@ def cargar_inventario_general():
 @st.cache_data(ttl=3600)
 def cargar_inventario_baja_rotacion():
     """
-    V8.1: Rotación Real (Huesos por Falta de Salidas).
+    V8.2: Rotación Real (Huesos).
     - Filtra BP/Stock + child_of.
-    - Busca salidas (done) a 'customer' O 'production'.
-    - Calcula días desde última salida.
+    - SOLO ALMACENABLES (detailed_type = product).
+    - Antigüedad por falta de salidas en 365 días.
     """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -236,31 +236,42 @@ def cargar_inventario_baja_rotacion():
         data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': campos_quant})
         
         df = pd.DataFrame(data_quants)
-        if df.empty: return pd.DataFrame(), f"Bodegas ({nombres_bodegas}) vacías."
+        if df.empty: return pd.DataFrame(), "Bodega vacía."
         
         df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
         df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desc.")
         df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "-")
         
-        # 4. Enriquecer con Costos y Kits
+        # 4. Enriquecer con Costos, Kits y TIPO DE PRODUCTO
         ids_prods_stock = df['pid'].unique().tolist()
-        prod_details = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods_stock], {'fields': ['standard_price', 'product_tmpl_id']})
+        
+        # -- CAMBIO V8.2: Leemos 'detailed_type' --
+        prod_details = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods_stock], {'fields': ['standard_price', 'product_tmpl_id', 'detailed_type']})
         df_prod_info = pd.DataFrame(prod_details)
+        
         df_prod_info['Costo'] = df_prod_info['standard_price']
         df_prod_info['tmpl_id'] = df_prod_info['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
         
-        df = pd.merge(df, df_prod_info[['id', 'Costo', 'tmpl_id']], left_on='pid', right_on='id', how='left')
-        if ids_tmpl_kits: df = df[~df['tmpl_id'].isin(ids_tmpl_kits)]
+        df = pd.merge(df, df_prod_info[['id', 'Costo', 'tmpl_id', 'detailed_type']], left_on='pid', right_on='id', how='left')
+        
+        # -- FILTROS DE LIMPIEZA --
+        if ids_tmpl_kits: df = df[~df['tmpl_id'].isin(ids_tmpl_kits)] # No Kits
+        df = df[df['detailed_type'] == 'product'] # Solo Almacenables (No servicios, no consumibles)
+        
         df['Valor'] = df['quantity'] * df['Costo']
+        
+        if df.empty: return pd.DataFrame(), "Sin productos almacenables."
 
         # 5. BUSCAR SALIDAS RECIENTES (Últimos 365 días)
-        # Destino: Cliente O Producción
         fecha_corte = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+        # Refrescamos lista de productos tras filtrar
+        ids_prods_final = df['pid'].unique().tolist()
+        
         dominio_moves = [
-            ['product_id', 'in', ids_prods_stock],
+            ['product_id', 'in', ids_prods_final],
             ['state', '=', 'done'],
             ['date', '>=', fecha_corte],
-            ['location_dest_id.usage', 'in', ['customer', 'production']] # <--- CAMBIO CLAVE
+            ['location_dest_id.usage', 'in', ['customer', 'production']]
         ]
         
         ids_moves = models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'search', [dominio_moves])
@@ -281,7 +292,7 @@ def cargar_inventario_baja_rotacion():
                 ultima = mapa_ult_salida[pid]
                 return (pd.Timestamp.now() - ultima).days
             else:
-                return 366 # Más de un año (Hueso seguro)
+                return 366 
 
         df['Dias_Sin_Salida'] = df.apply(calc_dias, axis=1)
 
@@ -295,7 +306,7 @@ def cargar_inventario_baja_rotacion():
         
         df_huesos = df_agrupado.sort_values('Dias_Sin_Salida', ascending=False)
         
-        return df_huesos, f"Filtro: {', '.join(nombres_bodegas)}"
+        return df_huesos, f"Filtro: {', '.join(nombres_bodegas)} (Solo Almacenables)"
 
     except Exception as e: return pd.DataFrame(), f"Error: {e}"
 
@@ -516,7 +527,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v8.1")
+st.title("🚀 Monitor Comercial ALROTEK v8.2")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -847,20 +858,22 @@ with tab_inv:
     else:
         st.success(msg_status)
     
-    # CONTROL DE FILTRO (ARRIBA)
     dias_min = st.slider("Días sin Salidas (Mínimo):", 0, 720, 365)
     
     if not df_huesos.empty:
-        # FILTRAR
+        # 1. Universo Total (Todo lo que es Almacenable en BP)
+        total_items_universo = len(df_huesos)
+        
+        # 2. Filtrado (Huesos)
         df_show = df_huesos[df_huesos['Dias_Sin_Salida'] >= dias_min]
         
         total_atrapado = df_show['Valor'].sum()
-        criticos = df_show[df_show['Dias_Sin_Salida'] > 365]
+        conteo_huesos = len(df_show)
         
         m1, m2, m3 = st.columns(3)
         m1.metric(f"Capital Estancado (>{dias_min} días)", f"₡ {total_atrapado/1e6:,.1f} M")
-        m2.metric("Items Sin Salida", len(df_show))
-        m3.metric("Huesos Críticos (>1 año)", len(criticos), delta_color="inverse")
+        m2.metric("Total Items en Bodega", total_items_universo)
+        m3.metric("Items Hueso (Filtrados)", conteo_huesos, delta_color="inverse")
         
         st.divider()
         
