@@ -204,48 +204,65 @@ def cargar_inventario_general():
 @st.cache_data(ttl=3600)
 def cargar_inventario_baja_rotacion():
     """
-    Inventario Baja Rotación (Pestaña Huesos).
-    Filtro: BP/Stock + child_of. Antigüedad: Max in_date. No Kits.
+    V7.1: Inventario Baja Rotación (Huesos).
+    Corrección: Manejo de fechas vacías (False) con errors='coerce'.
     """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
+        # 1. Detectar Kits
         try:
             ids_bom_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
             data_boms = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'read', [ids_bom_kits], {'fields': ['product_tmpl_id']})
             ids_tmpl_kits = [b['product_tmpl_id'][0] for b in data_boms if b['product_tmpl_id']]
         except: ids_tmpl_kits = []
         
+        # 2. Encontrar Ubicación BP/Stock
         dominio_loc = [
             ['complete_name', 'ilike', 'BP/Stock'],
             ['usage', '=', 'internal'],
             ['company_id', '=', COMPANY_ID]
         ]
         ids_locs_raiz = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
-        if not ids_locs_raiz: return pd.DataFrame(), "No se encontraron bodegas 'BP/Stock'"
         
+        if not ids_locs_raiz: 
+            return pd.DataFrame(), "❌ No se encontró ubicación 'BP/Stock'."
+            
         info_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_locs_raiz], {'fields': ['complete_name']})
         nombres_bodegas = [l['complete_name'] for l in info_locs]
 
+        # 3. Buscar Quants
         dominio_quant = [
             ['location_id', 'child_of', ids_locs_raiz], 
             ['quantity', '>', 0],
             ['company_id', '=', COMPANY_ID]
         ]
         campos_quant = ['product_id', 'quantity', 'location_id', 'in_date', 'create_date']
+        
         ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
         data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': campos_quant})
         
         df = pd.DataFrame(data_quants)
         if df.empty: return pd.DataFrame(), f"Bodegas ({nombres_bodegas}) vacías."
         
+        # 4. Procesamiento
         df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
         df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desc.")
         df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "-")
-        df['Fecha_Referencia'] = pd.to_datetime(df['in_date']).fillna(pd.to_datetime(df['create_date']))
         
+        # --- CORRECCIÓN DE FECHAS AQUÍ ---
+        # Usamos errors='coerce' para que convierta los 'False' de Odoo en NaT (Not a Time) sin fallar
+        df['Fecha_Base'] = pd.to_datetime(df['in_date'], errors='coerce')
+        df['Fecha_Creacion'] = pd.to_datetime(df['create_date'], errors='coerce')
+        
+        # Rellenar fechas vacías con una fecha por defecto (ej: 2020) o la de creación
+        df['Fecha_Referencia'] = df['Fecha_Base'].fillna(df['Fecha_Creacion'])
+        df['Fecha_Referencia'] = df['Fecha_Referencia'].fillna(pd.Timestamp('2020-01-01'))
+        # ---------------------------------
+        
+        # 5. Traer Costos y Filtrar Kits
         ids_prods = df['pid'].unique().tolist()
         prod_details = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'product_tmpl_id']})
         df_prod_info = pd.DataFrame(prod_details)
@@ -259,6 +276,7 @@ def cargar_inventario_baja_rotacion():
         
         df['Valor'] = df['quantity'] * df['Costo']
 
+        # 6. Agrupar
         df_agrupado = df.groupby(['Producto']).agg({
             'quantity': 'sum',
             'Valor': 'sum',
@@ -269,6 +287,7 @@ def cargar_inventario_baja_rotacion():
         df_huesos = df_agrupado.sort_values('Dias_En_Bodega', ascending=False)
         
         return df_huesos, f"Filtro: {', '.join(nombres_bodegas)}"
+
     except Exception as e: return pd.DataFrame(), f"Error: {e}"
 
 @st.cache_data(ttl=3600)
@@ -1014,3 +1033,4 @@ with tab_det:
                         df_hist = df_prod_cli.groupby(['date', 'Producto'])[['quantity', 'Venta_Neta']].sum().reset_index().sort_values('date', ascending=False)
                         st.download_button("📥 Descargar Historial", data=convert_df_to_excel(df_hist), file_name=f"Historial_{cliente_sel}.xlsx")
                     else: st.info("No hay detalle de productos.")
+
