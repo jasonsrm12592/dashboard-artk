@@ -39,7 +39,7 @@ hide_st_style = """
             .bg-purple { background-color: #8e44ad; }  /* Inventario */
             .bg-red { background-color: #c0392b; }     /* Provisiones */
             .bg-teal { background-color: #16a085; }    /* Compras */
-            .bg-gray { background-color: #7f8c8d; }    /* Ajustes/Otros */
+            .bg-gray { background-color: #7f8c8d; }    /* Otros Gastos (0.6) */
             .bg-light-orange { background-color: #f39c12; } /* Suministros */
             </style>
             """
@@ -53,17 +53,16 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # --- IDs CONTABLES SEGÚN IMAGEN DE PRODUCCIÓN ---
-    IDS_INGRESOS = [58, 384]    # 58: Venta Bienes, 384: Servicios
+    # IDs SEGÚN IMAGEN DE PRODUCCIÓN
+    IDS_INGRESOS = [58, 384]    
     
-    ID_COSTO_RETAIL = 76        # Costo mercadería vendida
-    ID_COSTO_INSTALACION = 399  # Costo servicios instalacion
-    ID_SUMINISTROS_PROY = 400   # Suministros e Insumos
-    ID_WIP = 503                # WIP (Proyecto en Proceso)
-    ID_PROVISION_PROY = 504     # Provisión Costo
-    ID_AJUSTES_INV = 395        # Ajustes (Mantenido de solicitud previa)
+    ID_COSTO_RETAIL = 76        
+    ID_COSTO_INSTALACION = 399  
+    ID_SUMINISTROS_PROY = 400   
+    ID_WIP = 503                
+    ID_PROVISION_PROY = 504     
+    ID_AJUSTES_INV = 395        
     
-    # Lista para filtrar en la consulta XML-RPC
     TODOS_LOS_IDS = IDS_INGRESOS + [ID_COSTO_RETAIL, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_WIP, ID_PROVISION_PROY, ID_AJUSTES_INV]
     
 except Exception:
@@ -224,10 +223,6 @@ def cargar_estructura_analitica():
 
 @st.cache_data(ttl=3600)
 def cargar_pnl_contable(anio):
-    """
-    V4.2: Usa los IDs corregidos (58, etc) pero MANTIENE el dominio abierto 
-    para la tabla de diagnóstico por si acaso.
-    """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -249,7 +244,6 @@ def cargar_pnl_contable(anio):
             df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
             df['Monto_Neto'] = df['credit'] - df['debit']
             
-            # Clasificación con IDs Corregidos
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -428,7 +422,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v4.2")
+st.title("🚀 Monitor Comercial ALROTEK v4.3")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -658,6 +652,15 @@ with tab_renta:
                 total_costo_retail = abs(df_filtered[df_filtered['Clasificacion'] == 'Costo Retail']['Monto_Neto'].sum())
                 total_otros = abs(df_filtered[df_filtered['Clasificacion'] == 'Sin Clasificar']['Monto_Neto'].sum())
             
+            # FILTRO DE "OTROS" (Solo cuentas 0.6) - V4.3
+            # Si no hay dataframe, total_otros ya es 0. Si hay, refinamos:
+            if not df_filtered.empty:
+                df_otros_filtrado = df_filtered[
+                    (df_filtered['Clasificacion'] == 'Sin Clasificar') & 
+                    (df_filtered['Nombre_Cuenta'].astype(str).str.startswith('0.6', na=False))
+                ]
+                total_otros = abs(df_otros_filtrado['Monto_Neto'].sum())
+
             df_horas_detalle = cargar_detalle_horas_estructura(ids_seleccionados)
             total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
             
@@ -688,7 +691,7 @@ with tab_renta:
             with k5: card_kpi("Provisiones", total_provision, "bg-red")
             with k6: card_kpi("Ajustes Inv.", total_ajustes, "bg-gray")
             with k7: card_kpi("Costo Retail (Mercadería)", total_costo_retail, "bg-orange") 
-            with k8: card_kpi("Otros / Sin Clasificar", total_otros, "bg-gray", nota="Verificar en Tabla Diagnóstico")
+            with k8: card_kpi("Otros / Sin Clasificar", total_otros, "bg-gray", nota="Solo gastos (0.6)")
             
             # --- FILA 3 (3 Cols) ---
             k9, k10, k11 = st.columns(3)
@@ -725,8 +728,12 @@ with tab_renta:
             
             st.divider()
             st.markdown("**Detalle Movimientos Contables (P&L)**")
+            
+            # MOSTRAR TABLA DE OTROS FILTRADA PARA DIAGNÓSTICO
             if not df_filtered.empty:
-                st.dataframe(df_filtered[['date', 'name', 'Nombre_Cuenta', 'Clasificacion', 'Monto_Neto']].sort_values('date', ascending=False), column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")}, use_container_width=True, hide_index=True)
+                # Solo mostrar en la tabla los que NO han sido clasificados o son 0.6
+                # O mostrar todos para transparencia. Vamos a mostrar todos ordenados por clasificacion.
+                st.dataframe(df_filtered[['date', 'name', 'Nombre_Cuenta', 'Clasificacion', 'Monto_Neto']].sort_values(['Clasificacion', 'date'], ascending=True), column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")}, use_container_width=True, hide_index=True)
             
             # --- DIAGNÓSTICO ---
             with st.expander("🕵️ Diagnóstico de Cuentas"):
