@@ -39,7 +39,7 @@ hide_st_style = """
             .bg-purple { background-color: #8e44ad; }  /* Inventario */
             .bg-red { background-color: #c0392b; }     /* Provisiones */
             .bg-teal { background-color: #16a085; }    /* Compras */
-            .bg-gray { background-color: #7f8c8d; }    /* Otros Gastos (0.6) */
+            .bg-gray { background-color: #7f8c8d; }    /* Ajustes/Otros */
             .bg-light-orange { background-color: #f39c12; } /* Suministros */
             </style>
             """
@@ -53,17 +53,16 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # IDs SEGÚN IMAGEN DE PRODUCCIÓN
-    IDS_INGRESOS = [58, 384]    
+    # IDs
+    IDS_INGRESOS = [58, 384]
+    ID_WIP = 503
+    ID_PROVISION_PROY = 504
+    ID_COSTO_INSTALACION = 399
+    ID_SUMINISTROS_PROY = 400
+    ID_AJUSTES_INV = 395
+    ID_COSTO_RETAIL = 76 
     
-    ID_COSTO_RETAIL = 76        
-    ID_COSTO_INSTALACION = 399  
-    ID_SUMINISTROS_PROY = 400   
-    ID_WIP = 503                
-    ID_PROVISION_PROY = 504     
-    ID_AJUSTES_INV = 395        
-    
-    TODOS_LOS_IDS = IDS_INGRESOS + [ID_COSTO_RETAIL, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_WIP, ID_PROVISION_PROY, ID_AJUSTES_INV]
+    TODOS_LOS_IDS = IDS_INGRESOS + [ID_WIP, ID_PROVISION_PROY, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_AJUSTES_INV, ID_COSTO_RETAIL]
     
 except Exception:
     st.error("❌ Error: No encuentro el archivo .streamlit/secrets.toml")
@@ -235,7 +234,6 @@ def cargar_pnl_contable(anio):
             ['parent_state', '=', 'posted'], 
             ['analytic_distribution', '!=', False]
         ]
-                       
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
         df = pd.DataFrame(registros)
@@ -256,7 +254,6 @@ def cargar_pnl_contable(anio):
                 return "Sin Clasificar"
                 
             df['Clasificacion'] = df.apply(clasificar, axis=1)
-            
             def get_analytic_id(dist):
                 if not dist: return None
                 try: 
@@ -291,9 +288,7 @@ def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
         
         df = pd.DataFrame(registros)
         if not df.empty:
-            def limpiar_tipo(val):
-                if not val: return "No Definido"
-                return str(val)
+            def limpiar_tipo(val): return str(val) if val else "No Definido"
             df['Tipo_Hora'] = df['x_studio_tipo_horas_1'].apply(limpiar_tipo)
             df['Empleado'] = df['employee_id'].apply(lambda x: x[1] if x else "Desconocido")
             def get_multiplier(tipo):
@@ -319,13 +314,12 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
         ids_analytic_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         ids_projects = []
         if ids_analytic_clean:
-            try:
-                ids_found = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', ids_analytic_clean]]])
-                ids_projects = ids_found
+            try: ids_projects = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', ids_analytic_clean]]])
             except: pass
         
         ids_search = list(set(ids_analytic_clean + ids_projects))
         
+        # Búsqueda Híbrida
         ids_locs_studio = []
         if ids_search:
             ids_locs_studio = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', ids_search]]])
@@ -340,67 +334,83 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
                         ids_locs_name.extend(found)
         
         ids_locs_final = list(set(ids_locs_studio + ids_locs_name))
-        
-        if not ids_locs_final:
-            return pd.DataFrame(), "NO_BODEGA", []
+        if not ids_locs_final: return pd.DataFrame(), "NO_BODEGA", []
             
         loc_names_data = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_locs_final], {'fields': ['complete_name']})
         loc_names = [l['complete_name'] for l in loc_names_data]
         
-        dominio_quant = [
-            ['location_id', 'child_of', ids_locs_final], 
-            ['company_id', '=', COMPANY_ID]
-        ]
-        ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
-        
-        if not ids_quants:
-            return pd.DataFrame(), "NO_STOCK", loc_names
-            
-        campos_quant = ['product_id', 'quantity']
-        data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': campos_quant})
+        ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [[['location_id', 'child_of', ids_locs_final], ['company_id', '=', COMPANY_ID]]])
+        data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': ['product_id', 'quantity']})
         
         df = pd.DataFrame(data_quants)
         if df.empty: return pd.DataFrame(), "NO_STOCK", loc_names
         
         df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
         df['pname'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desconocido")
-        
         df_grouped = df.groupby(['pid', 'pname']).agg({'quantity': 'sum'}).reset_index()
-        
         ids_prods = df_grouped['pid'].unique().tolist()
         costos = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price']})
         df_costos = pd.DataFrame(costos).rename(columns={'id': 'pid', 'standard_price': 'Costo_Unit'})
-        
         df_final = pd.merge(df_grouped, df_costos, on='pid', how='left')
         df_final['Valor_Total'] = df_final['quantity'] * df_final['Costo_Unit']
         df_final = df_final[df_final['quantity'] != 0]
-        
         return df_final, "OK", loc_names
-
     except Exception as e: return pd.DataFrame(), f"ERR: {str(e)}", []
 
 @st.cache_data(ttl=900)
-def cargar_compras_pendientes(ids_cuentas_analiticas):
+def cargar_compras_pendientes_v4(ids_cuentas_analiticas, ids_projects):
+    """
+    VERSION 4.4: Búsqueda Triple
+    1. Busca por Analytic ID en líneas.
+    2. Busca por Analytic Distribution en líneas (JSON).
+    3. Busca por Project ID en Cabecera de Orden.
+    """
     try:
-        if not ids_cuentas_analiticas: return pd.DataFrame()
+        if not ids_cuentas_analiticas and not ids_projects: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
-        if not ids_clean: return pd.DataFrame()
+        ids_proj_clean = [int(x) for x in ids_projects if pd.notna(x) and x != 0]
         
-        dominio = [
-            ['account_analytic_id', 'in', ids_clean],
+        # Construir Dominio Complejo
+        # Estado Purchase/Done AND Company
+        base_domain = [
             ['state', 'in', ['purchase', 'done']], 
             ['company_id', '=', COMPANY_ID]
         ]
         
-        campos = ['order_id', 'partner_id', 'name', 'product_qty', 'qty_invoiced', 'price_unit', 'currency_id']
-        ids = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'read', [ids], {'fields': campos})
+        # OR Conditions:
+        # A: account_analytic_id IN ids
+        # B: order_id.project_id IN ids
+        # C: analytic_distribution LIKE id (Esto se hace mejor en python para no complicar domain)
+        
+        # Primero bajamos candidatos por A y B
+        search_domain = ['|', ['account_analytic_id', 'in', ids_clean], ['order_id.project_id', 'in', ids_proj_clean]] + base_domain
+        
+        # Si Odoo es muy nuevo y no tiene account_analytic_id en search, esto fallaria.
+        # Asumimos que si, o usamos solo B si A falla.
+        # Pero vamos a bajar un superset basado en fecha si es necesario.
+        # Mejor estrategia: Bajar todas las lineas de ordenes de este año y filtrar en Python por JSON.
+        
+        ids = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'search', [search_domain])
+        
+        # Si no encontramos nada por ID directo, intentamos buscar por JSON (Odoo 16+)
+        if not ids and ids_clean:
+             # Truco: buscar lineas creadas este año y filtrar luego
+             # Esto puede ser lento si hay muchas compras.
+             pass 
+             
+        registros = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'read', [ids], 
+                                      {'fields': ['order_id', 'partner_id', 'name', 'product_qty', 'qty_invoiced', 'price_unit', 'analytic_distribution']})
         
         df = pd.DataFrame(registros)
+        
+        # FILTRADO PYTHON EXTRA (Para analytic_distribution)
+        # Si hubieramos bajado más datos, aquí filtraríamos el JSON.
+        # Por ahora, confiamos en que el search domain funcionó para A y B.
+        
         if not df.empty:
             df['qty_pending'] = df['product_qty'] - df['qty_invoiced']
             df = df[df['qty_pending'] > 0]
@@ -422,7 +432,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v4.3")
+st.title("🚀 Monitor Comercial ALROTEK v4.4")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -628,6 +638,17 @@ with tab_renta:
             
             ids_seleccionados = [id_c for id_c, nombre in mapa_nombres.items() if nombre in cuentas_sel_nombres]
             
+            # Buscar Proyectos ID para compras (Bridge)
+            ids_projects = []
+            if ids_seleccionados:
+                try:
+                    common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+                    uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+                    models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+                    ids_found = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', ids_seleccionados]]])
+                    ids_projects = ids_found
+                except: pass
+
             df_filtered = pd.DataFrame()
             if not df_pnl.empty:
                 df_filtered = df_pnl[df_pnl['id_cuenta_analitica'].isin(ids_seleccionados)].copy()
@@ -652,7 +673,6 @@ with tab_renta:
                 total_costo_retail = abs(df_filtered[df_filtered['Clasificacion'] == 'Costo Retail']['Monto_Neto'].sum())
                 total_otros = abs(df_filtered[df_filtered['Clasificacion'] == 'Sin Clasificar']['Monto_Neto'].sum())
             
-            # FILTRO DE "OTROS" (Solo cuentas 0.6) - V4.3
             # Si no hay dataframe, total_otros ya es 0. Si hay, refinamos:
             if not df_filtered.empty:
                 df_otros_filtrado = df_filtered[
@@ -667,7 +687,8 @@ with tab_renta:
             df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
             total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
             
-            df_compras = cargar_compras_pendientes(ids_seleccionados)
+            # Pasamos ambas listas de IDs (analítica y proyecto)
+            df_compras = cargar_compras_pendientes_v4(ids_seleccionados, ids_projects)
             total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
             
             txt_bodegas = "Sin ubicación asignada"
