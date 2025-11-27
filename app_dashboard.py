@@ -11,6 +11,43 @@ import ast
 # --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="Alrotek Sales Monitor", layout="wide")
 
+
+# --- BLOQUE DE DIAGNÓSTICO TEMPORAL ---
+with st.expander("🔬 RAYOS X A UNA ORDEN DE COMPRA", expanded=True):
+    oc_name = st.text_input("Escribe el nombre exacto de la OC (ej: OC-0020663):", value="OC-0020663")
+    if st.button("Escanear OC"):
+        try:
+            common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+            uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+            models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+            
+            # 1. Buscar la Cabecera
+            ids_oc = models.execute_kw(DB, uid, PASSWORD, 'purchase.order', 'search', [[['name', '=', oc_name]]])
+            
+            if not ids_oc:
+                st.error(f"❌ No se encontró ninguna compra llamada '{oc_name}' en Odoo.")
+            else:
+                # Leer Cabecera
+                oc_data = models.execute_kw(DB, uid, PASSWORD, 'purchase.order', 'read', [ids_oc], {'fields': ['name', 'state', 'partner_id', 'project_id', 'analytic_account_id']})
+                st.write("**Cabecera (Purchase Order):**", oc_data)
+                
+                # 2. Buscar Líneas
+                ids_lines = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'search', [[['order_id', 'in', ids_oc]]])
+                lines_data = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'read', [ids_lines], 
+                    {'fields': ['product_id', 'product_qty', 'qty_invoiced', 'qty_received', 'price_unit', 'account_analytic_id', 'analytic_distribution']})
+                
+                st.write(f"**Líneas ({len(lines_data)} encontradas):**")
+                df_lines = pd.DataFrame(lines_data)
+                if not df_lines.empty:
+                    # Calcular pendiente para ver si da > 0
+                    df_lines['PENDIENTE'] = df_lines['product_qty'] - df_lines['qty_invoiced']
+                    st.dataframe(df_lines)
+                else:
+                    st.warning("La orden existe pero no tiene líneas.")
+                    
+        except Exception as e:
+            st.error(f"Error de conexión: {e}")
+# --------------------------------------
 hide_st_style = """
             <style>
             #MainMenu {visibility: hidden;}
@@ -967,3 +1004,4 @@ with tab_det:
                         df_hist = df_prod_cli.groupby(['date', 'Producto'])[['quantity', 'Venta_Neta']].sum().reset_index().sort_values('date', ascending=False)
                         st.download_button("📥 Descargar Historial", data=convert_df_to_excel(df_hist), file_name=f"Historial_{cliente_sel}.xlsx")
                     else: st.info("No hay detalle de productos.")
+
