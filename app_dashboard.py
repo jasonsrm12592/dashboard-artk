@@ -204,11 +204,7 @@ def cargar_inventario_general():
 @st.cache_data(ttl=3600)
 def cargar_inventario_baja_rotacion():
     """
-    V7.2: Inventario Baja Rotación.
-    - Filtra BP/Stock.
-    - Excluye Kits.
-    - Usa in_date (Ultimo Ingreso) para calcular antigüedad.
-    - Manejo seguro de fechas y columnas.
+    V7.1: Inventario Baja Rotación (Huesos).
     """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -255,7 +251,7 @@ def cargar_inventario_baja_rotacion():
         df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desc.")
         df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "-")
         
-        # --- FECHAS ---
+        # --- FECHAS BLINDADAS ---
         df['Fecha_Base'] = pd.to_datetime(df['in_date'], errors='coerce')
         df['Fecha_Creacion'] = pd.to_datetime(df['create_date'], errors='coerce')
         df['Fecha_Referencia'] = df['Fecha_Base'].fillna(df['Fecha_Creacion'])
@@ -276,7 +272,6 @@ def cargar_inventario_baja_rotacion():
         df['Valor'] = df['quantity'] * df['Costo']
 
         # 6. AGRUPAR
-        # IMPORTANTE: join de ubicaciones para no perderlas
         df_agrupado = df.groupby(['Producto']).agg({
             'quantity': 'sum',
             'Valor': 'sum',
@@ -499,7 +494,7 @@ def cargar_facturacion_estimada_v2(ids_projects, tc_usd):
     except Exception: return pd.DataFrame()
 
 def cargar_metas():
-    """Función restaurada V7.0"""
+    """Función restaurada V7.2"""
     if os.path.exists("metas.xlsx"):
         df = pd.read_excel("metas.xlsx")
         df['Mes'] = pd.to_datetime(df['Mes'])
@@ -509,7 +504,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v7.2")
+st.title("🚀 Monitor Comercial ALROTEK v7.3")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -752,12 +747,6 @@ with tab_renta:
             df_horas_detalle = cargar_detalle_horas_mes(ids_seleccionados)
             total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
             
-            # Inventario Baja Rotación (Corrected variable name)
-            with st.spinner("Analizando inventario..."):
-                 df_huesos, msg_status = cargar_inventario_baja_rotacion()
-                 # We don't use df_huesos here, we need inventory *of the project*
-            
-            # Project Inventory (V4)
             df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
             total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
             
@@ -846,19 +835,23 @@ with tab_inv:
     else:
         st.success(msg_status)
     
+    # MOVER SLIDER ARRIBA PARA QUE SEA DINÁMICO
+    dias_min = st.slider("Filtrar por días mínimos de antigüedad:", 0, 720, 365)
+    
     if not df_huesos.empty:
-        total_atrapado = df_huesos['Valor'].sum()
-        criticos = df_huesos[df_huesos['Dias_En_Bodega'] > 365]
+        # APLICAR FILTRO PRIMERO
+        df_show = df_huesos[df_huesos['Dias_En_Bodega'] >= dias_min]
+        
+        # CALCULAR KPIs SOBRE LO FILTRADO
+        total_atrapado = df_show['Valor'].sum()
+        criticos = df_show[df_show['Dias_En_Bodega'] > 365] # Referencia visual
         
         m1, m2, m3 = st.columns(3)
-        m1.metric("Valor Total en Bodega", f"₡ {total_atrapado/1e6:,.1f} M")
-        m2.metric("Items Totales", len(df_huesos))
+        m1.metric(f"Capital en Riesgo (>{dias_min} días)", f"₡ {total_atrapado/1e6:,.1f} M")
+        m2.metric("Items Sin Rotación", len(df_show))
         m3.metric("Huesos Críticos (>1 año)", len(criticos), delta_color="inverse")
         
         st.divider()
-        
-        dias_min = st.slider("Filtrar por días mínimos de antigüedad:", 0, 720, 365)
-        df_show = df_huesos[df_huesos['Dias_En_Bodega'] >= dias_min]
         
         st.dataframe(
             df_show[['Producto', 'Ubicacion', 'quantity', 'Dias_En_Bodega', 'Valor']],
