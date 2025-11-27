@@ -3,7 +3,7 @@ import pandas as pd
 import xmlrpc.client
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
 import io
 import os
 import ast
@@ -39,6 +39,7 @@ hide_st_style = """
             .bg-purple { background-color: #8e44ad; }  /* Inventario */
             .bg-red { background-color: #c0392b; }     /* Provisiones */
             .bg-teal { background-color: #16a085; }    /* Compras */
+            .bg-cyan { background-color: #1abc9c; }    /* Proyección Facturación */
             .bg-gray { background-color: #7f8c8d; }    /* Ajustes/Otros */
             .bg-light-orange { background-color: #f39c12; } /* Suministros */
             </style>
@@ -53,7 +54,7 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # IDs CONTABLES (PRODUCCIÓN)
+    # IDs CONTABLES
     IDS_INGRESOS = [58, 384]     
     ID_COSTO_RETAIL = 76         
     ID_COSTO_INSTALACION = 399   
@@ -62,8 +63,7 @@ try:
     ID_PROVISION_PROY = 504      
     ID_AJUSTES_INV = 395         
     
-    # Base para filtrar (se enriquecerá dinámicamente con cuentas 6%)
-    IDS_BASE = IDS_INGRESOS + [ID_WIP, ID_PROVISION_PROY, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_AJUSTES_INV, ID_COSTO_RETAIL]
+    TODOS_LOS_IDS = IDS_INGRESOS + [ID_WIP, ID_PROVISION_PROY, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_AJUSTES_INV, ID_COSTO_RETAIL]
     
 except Exception:
     st.error("❌ Error: No encuentro el archivo .streamlit/secrets.toml")
@@ -223,29 +223,19 @@ def cargar_estructura_analitica():
 
 @st.cache_data(ttl=3600)
 def cargar_pnl_historico():
-    """
-    Descarga movimientos analíticos HISTÓRICOS (Sin filtro de año).
-    Incluye cuentas clave + Cuentas de Gastos (6%).
-    """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
-        # 1. Buscar cuentas de Gastos (6%) para añadir a la lista base
         ids_gastos = models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])
+        ids_totales = list(set(TODOS_LOS_IDS + ids_gastos))
         
-        # Lista final de cuentas a descargar
-        ids_totales = list(set(IDS_BASE + ids_gastos))
-        
-        # 2. Descarga sin limite de fecha (HISTORICO)
         dominio_pnl = [
             ['account_id', 'in', ids_totales],
             ['company_id', '=', COMPANY_ID], 
             ['parent_state', '=', 'posted'], 
             ['analytic_distribution', '!=', False]
         ]
-                       
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
         df = pd.DataFrame(registros)
@@ -253,7 +243,6 @@ def cargar_pnl_historico():
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
             df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
             df['Monto_Neto'] = df['credit'] - df['debit']
-            
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -263,11 +252,8 @@ def cargar_pnl_historico():
                 if id_acc == ID_SUMINISTROS_PROY: return "Suministros"
                 if id_acc == ID_AJUSTES_INV: return "Ajustes Inv"
                 if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
-                # Si llegó aquí, es una cuenta de gasto 6% (Otros)
                 return "Otros Gastos"
-                
             df['Clasificacion'] = df.apply(clasificar, axis=1)
-            
             def get_analytic_id(dist):
                 if not dist: return None
                 try: 
@@ -280,33 +266,19 @@ def cargar_pnl_historico():
 
 @st.cache_data(ttl=900)
 def cargar_detalle_horas_mes(ids_cuentas_analiticas):
-    """
-    Carga horas filtrando SOLAMENTE el MES ACTUAL.
-    """
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
-        
-        # FECHAS MES ACTUAL
         hoy = datetime.now()
         inicio_mes = hoy.replace(day=1).strftime('%Y-%m-%d')
-        
-        dominio = [
-            ['account_id', 'in', ids_clean],
-            ['date', '>=', inicio_mes], # Solo desde el 1ro del mes
-            ['employee_id', '!=', False], 
-            ['x_studio_tipo_horas_1', '!=', False] 
-        ]
-        
+        dominio = [['account_id', 'in', ids_clean], ['date', '>=', inicio_mes], ['date', '<=', hoy.strftime('%Y-%m-%d')], ['employee_id', '!=', False], ['x_studio_tipo_horas_1', '!=', False]]
         campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name', 'employee_id']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
-        
         df = pd.DataFrame(registros)
         if not df.empty:
             def limpiar_tipo(val): return str(val) if val else "No Definido"
@@ -408,6 +380,47 @@ def cargar_compras_pendientes_v7_json_scanner(ids_cuentas_analiticas, tc_usd):
         return df_filtrado[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
     except Exception: return pd.DataFrame()
 
+# --- NUEVA FUNCIÓN V6.0: FACTURACIÓN ESTIMADA ---
+@st.cache_data(ttl=900)
+def cargar_facturacion_estimada(ids_projects, tc_usd):
+    """
+    Busca en x_facturas.proyectos vinculados a los IDs de proyecto.
+    Campo de vínculo: x_studio_field_sFPxe (asumimos es M2O a project.project)
+    Campo de estado: x_studio_facturado (Boolean)
+    Campo de monto: x_studio_monto (ASUMIDO, CAMBIAR SI ES OTRO)
+    """
+    try:
+        if not ids_projects: return pd.DataFrame()
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
+        # Limpieza IDs
+        ids_clean = [int(x) for x in ids_projects if pd.notna(x) and x != 0]
+        if not ids_clean: return pd.DataFrame()
+        
+        # Filtro: Proyecto coincidente + No Facturado
+        dominio = [
+            ['x_studio_field_sFPxe', 'in', ids_clean],
+            ['x_studio_facturado', '=', False]
+        ]
+        
+        # LEER CAMPOS (Ajustar 'x_studio_monto' si el nombre real es otro)
+        campos = ['x_name', 'x_studio_monto', 'x_studio_fecha_estimada'] 
+        
+        ids = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'search', [dominio])
+        registros = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'read', [ids], {'fields': campos})
+        
+        df = pd.DataFrame(registros)
+        if not df.empty:
+            # Convertir USD a CRC (Asumimos que ingresan en USD según indicación)
+            df['Monto_CRC'] = df['x_studio_monto'] * tc_usd
+            df['Hito'] = df['x_name'] if 'x_name' in df.columns else "Hito Sin Nombre"
+            return df
+            
+        return pd.DataFrame()
+    except Exception: return pd.DataFrame()
+
 def cargar_metas():
     if os.path.exists("metas.xlsx"):
         df = pd.read_excel("metas.xlsx")
@@ -418,7 +431,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v5.8")
+st.title("🚀 Monitor Comercial ALROTEK v6.0")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -596,7 +609,6 @@ with tab_prod:
 
 # === PESTAÑA 3: RENTABILIDAD (CONTROL PROJECT) ===
 with tab_renta:
-    # V5.8: Eliminado selector de año
     
     with st.spinner('Analizando Histórico P&L...'):
         df_pnl = cargar_pnl_historico()
@@ -621,6 +633,16 @@ with tab_renta:
             
             ids_seleccionados = [id_c for id_c, nombre in mapa_nombres.items() if nombre in cuentas_sel_nombres]
             
+            # Buscar IDs de Proyectos (Bridge Analytic -> Project) para usar en modelo facturas
+            ids_projects = []
+            try:
+                common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+                uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+                models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+                ids_found = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', ids_seleccionados]]])
+                ids_projects = ids_found
+            except: pass
+
             df_filtered = pd.DataFrame()
             if not df_pnl.empty:
                 df_filtered = df_pnl[df_pnl['id_cuenta_analitica'].isin(ids_seleccionados)].copy()
@@ -658,6 +680,10 @@ with tab_renta:
             df_compras = cargar_compras_pendientes_v7_json_scanner(ids_seleccionados, tc_usd)
             total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
             
+            # --- NUEVA CARGA: FACTURACIÓN ESTIMADA ---
+            df_fact_estimada = cargar_facturacion_estimada(ids_projects, tc_usd)
+            total_fact_pendiente = df_fact_estimada['Monto_CRC'].sum() if not df_fact_estimada.empty else 0
+            
             txt_bodegas = "Sin ubicación asignada"
             color_bg = "bg-purple"
             if status_stock == "OK" or status_stock == "NO_STOCK":
@@ -681,11 +707,12 @@ with tab_renta:
             with k7: card_kpi("Costo Retail", total_costo_retail, "bg-orange") 
             with k8: card_kpi("Otros (Gastos 6%)", total_otros, "bg-gray")
             
-            # --- FILA 3 ---
-            k9, k10, k11 = st.columns(3)
+            # --- FILA 3 (KPIs Operativos) ---
+            k9, k10, k11, k12 = st.columns(4)
             with k9: card_kpi("Inventario Sitio", total_stock_sitio, color_bg, nota=txt_bodegas)
             with k10: card_kpi("Compras Pendientes", total_compras_pendientes, "bg-teal")
             with k11: card_kpi("Costo Horas (Mes Actual)", total_horas_ajustado, "bg-blue")
+            with k12: card_kpi("Fact. Pendiente Estimada", total_fact_pendiente, "bg-cyan", nota="Proyección futura")
             
             st.divider()
             
@@ -699,7 +726,7 @@ with tab_renta:
             
             with c_stock:
                 st.markdown("##### 📦 Detalle Inventario / Compras")
-                tab_inv_det, tab_com_det = st.tabs(["Inventario Físico", "Compras Pendientes"])
+                tab_inv_det, tab_com_det, tab_fact_det = st.tabs(["Inventario Físico", "Compras Pendientes", "Fact. Pendiente"])
                 with tab_inv_det:
                     if not df_stock_sitio.empty:
                         st.dataframe(df_stock_sitio[['pname', 'quantity', 'Valor_Total']], column_config={"pname": "Producto", "Valor_Total": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
@@ -708,6 +735,14 @@ with tab_renta:
                     if not df_compras.empty:
                         st.dataframe(df_compras, column_config={"Monto_Pendiente": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
                     else: st.caption("Todo facturado.")
+                with tab_fact_det:
+                    if not df_fact_estimada.empty:
+                        st.dataframe(df_fact_estimada[['Hito', 'x_studio_monto', 'Monto_CRC', 'x_studio_fecha_estimada']], 
+                                     column_config={
+                                         "x_studio_monto": st.column_config.NumberColumn("Monto USD", format="$ %.2f"),
+                                         "Monto_CRC": st.column_config.NumberColumn("Monto CRC", format="₡ %.2f")
+                                     }, hide_index=True, use_container_width=True)
+                    else: st.caption("No hay hitos pendientes.")
             
             st.divider()
             st.markdown("**Detalle Movimientos Contables (Acumulado)**")
