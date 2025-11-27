@@ -257,17 +257,35 @@ def cargar_pnl_contable(anio):
 
 @st.cache_data(ttl=900)
 def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
+    """
+    Carga horas filtrando por MES ACTUAL y asegura que sean de empleados.
+    """
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
-        dominio = [['account_id', 'in', ids_clean], ['date', '>=', f'{datetime.now().year}-01-01'], ['employee_id', '!=', False], ['x_studio_tipo_horas_1', '!=', False]]
+        
+        # CALCULO DE FECHAS (Mes en Curso)
+        hoy = datetime.now()
+        inicio_mes = hoy.replace(day=1).strftime('%Y-%m-%d')
+        # Filtramos desde el 1ro del mes actual en adelante
+        
+        dominio = [
+            ['account_id', 'in', ids_clean],
+            ['date', '>=', inicio_mes], # Inicio Mes Actual
+            ['date', '<=', hoy.strftime('%Y-%m-%d')], # Hasta Hoy
+            ['employee_id', '!=', False], 
+            ['x_studio_tipo_horas_1', '!=', False]
+        ]
+        
         campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name', 'employee_id']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
+        
         df = pd.DataFrame(registros)
         if not df.empty:
             def limpiar_tipo(val): return str(val) if val else "No Definido"
@@ -292,6 +310,7 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
         ids_analytic_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         ids_projects = []
         if ids_analytic_clean:
@@ -379,7 +398,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v5.4")
+st.title("🚀 Monitor Comercial ALROTEK v5.5")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -568,14 +587,6 @@ with tab_renta:
         
         lista_planes = sorted(list(set(mapa_cuentas.values())))
         
-        # --- DIAGNÓSTICO ---
-        with st.expander("🕵️ Diagnóstico de Cuentas de Ingreso (Ver IDs reales)"):
-            if not df_pnl.empty:
-                df_diag = df_pnl[df_pnl['credit'] > 0][['ID_Cuenta', 'Nombre_Cuenta']].drop_duplicates().sort_values('ID_Cuenta')
-                st.dataframe(df_diag, hide_index=True, use_container_width=True)
-            else:
-                st.warning("No hay movimientos contables.")
-
         st.subheader("Buscador de Proyectos")
         c_filt1, c_filt2 = st.columns(2)
         with c_filt1:
@@ -605,35 +616,28 @@ with tab_renta:
             total_otros = 0
 
             if not df_filtered.empty:
+                # FILTRO ANTI-DUPLICIDAD: Excluir asientos de "Hora" o "Timesheet" en WIP/Instalación
+                mask_no_horas = ~df_filtered['name'].astype(str).str.contains("Hora|Timesheet|Nómina", case=False, na=False)
+                
+                df_wip_clean = df_filtered[(df_filtered['Clasificacion'] == 'WIP') & mask_no_horas]
+                df_inst_clean = df_filtered[(df_filtered['Clasificacion'] == 'Instalación') & mask_no_horas]
+
                 total_ventas = abs(df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum())
-                total_instalacion = abs(df_filtered[df_filtered['Clasificacion'] == 'Instalación']['Monto_Neto'].sum())
+                total_instalacion = abs(df_inst_clean['Monto_Neto'].sum())
                 total_suministros = abs(df_filtered[df_filtered['Clasificacion'] == 'Suministros']['Monto_Neto'].sum())
-                total_wip = abs(df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum())
+                total_wip = abs(df_wip_clean['Monto_Neto'].sum())
                 total_provision = abs(df_filtered[df_filtered['Clasificacion'] == 'Provisión']['Monto_Neto'].sum())
                 total_ajustes = df_filtered[df_filtered['Clasificacion'] == 'Ajustes Inv']['Monto_Neto'].sum()
                 total_costo_retail = abs(df_filtered[df_filtered['Clasificacion'] == 'Costo Retail']['Monto_Neto'].sum())
-                total_otros = abs(df_filtered[df_filtered['Clasificacion'] == 'Sin Clasificar']['Monto_Neto'].sum())
-            
-            # FILTRO DE "OTROS" (Solo gastos 0.6)
-            if not df_filtered.empty:
+                
+                # Otros (Gastos 0.6)
                 df_otros_filtrado = df_filtered[
                     (df_filtered['Clasificacion'] == 'Sin Clasificar') & 
                     (df_filtered['Nombre_Cuenta'].astype(str).str.startswith('0.6', na=False))
                 ]
                 total_otros = abs(df_otros_filtrado['Monto_Neto'].sum())
 
-            # Pasa el 'anio_r_sel' a la función
-            df_horas_detalle = cargar_detalle_horas_estructura(ids_seleccionados) # <--- OJO, EN V5.4 NO PASAMOS AÑO EN ARGUMENTO PERO LA FUNCIÓN LO TIENE DENTRO?
-            # REVISANDO LA FUNCIÓN ARRIBA: 'date' >= ... year. SI, PERO USA datetime.now().year FIJO.
-            # VAMOS A CAMBIARLO AHORA MISMO EN EL CÓDIGO DE ABAJO PARA QUE USE 'anio_r_sel'
-
-            # CORRECCIÓN EN VIVO: La función 'cargar_detalle_horas_estructura' definida arriba usa datetime.now().
-            # Pero como no puedo editar la función ya pegada arriba sin que copies todo de nuevo, 
-            # mejor redefinir la función AQUI abajo o dejarla así por ahora (usará 2025 si estamos en 2025).
-            
-            # NOTA: Para la versión perfecta, la función debería recibir el año.
-            # Pero como pediste solo el reemplazo total, el código de arriba ya está "fixed".
-            
+            df_horas_detalle = cargar_detalle_horas_estructura(ids_seleccionados)
             total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
             
             df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
@@ -670,22 +674,17 @@ with tab_renta:
             k9, k10, k11 = st.columns(3)
             with k9: card_kpi("Inventario Sitio", total_stock_sitio, color_bg, nota=txt_bodegas)
             with k10: card_kpi("Compras Pendientes", total_compras_pendientes, "bg-teal")
-            with k11: card_kpi("Costo Horas (Ajustado)", total_horas_ajustado, "bg-blue")
+            with k11: card_kpi(f"Costo Horas (Mes Actual)", total_horas_ajustado, "bg-blue")
             
             st.divider()
             
             c_horas, c_stock = st.columns(2)
             with c_horas:
-                st.markdown("##### 🕒 Desglose de Horas (Shadow Cost)")
+                st.markdown("##### 🕒 Desglose de Horas")
                 if not df_horas_detalle.empty:
                     resumen_horas = df_horas_detalle.groupby(['Tipo_Hora', 'Multiplicador'])[['Horas', 'Costo']].sum().reset_index()
                     st.dataframe(resumen_horas, column_config={"Costo": st.column_config.NumberColumn(format="₡ %.2f"), "Multiplicador": st.column_config.NumberColumn(format="x %.1f")}, hide_index=True, use_container_width=True)
-                    
-                    with st.expander("🕵️ Auditoría Detallada de Horas"):
-                        df_audit = df_horas_detalle[['date', 'Empleado', 'name', 'Tipo_Hora', 'Horas', 'Costo']].sort_values('date', ascending=False)
-                        st.dataframe(df_audit, use_container_width=True)
-                        st.download_button("📥 Descargar", data=convert_df_to_excel(df_audit), file_name="Auditoria_Horas.xlsx")
-                else: st.caption("Sin registros.")
+                else: st.caption("Sin registros este mes.")
             
             with c_stock:
                 st.markdown("##### 📦 Detalle Inventario / Compras")
@@ -703,11 +702,6 @@ with tab_renta:
             st.markdown("**Detalle Movimientos Contables (P&L)**")
             if not df_filtered.empty:
                 st.dataframe(df_filtered[['date', 'name', 'Nombre_Cuenta', 'Clasificacion', 'Monto_Neto']].sort_values(['Clasificacion', 'date'], ascending=True), column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")}, use_container_width=True, hide_index=True)
-            
-            # --- DIAGNÓSTICO ---
-            with st.expander("🕵️ Diagnóstico de Cuentas"):
-                 if not df_pnl.empty:
-                     st.dataframe(df_pnl[['ID_Cuenta', 'Nombre_Cuenta']].drop_duplicates().sort_values('ID_Cuenta'), hide_index=True, use_container_width=True)
 
 # === PESTAÑA 4: INVENTARIO ===
 with tab_inv:
