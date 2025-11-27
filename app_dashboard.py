@@ -181,6 +181,7 @@ def cargar_detalle_productos():
 
 @st.cache_data(ttl=3600)
 def cargar_inventario_general():
+    """Inventario para pestaña Productos"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -203,7 +204,11 @@ def cargar_inventario_general():
 @st.cache_data(ttl=3600)
 def cargar_inventario_baja_rotacion():
     """
-    V7.1: Inventario Baja Rotación (Huesos) - CORREGIDA.
+    V7.2: Inventario Baja Rotación.
+    - Filtra BP/Stock.
+    - Excluye Kits.
+    - Usa in_date (Ultimo Ingreso) para calcular antigüedad.
+    - Manejo seguro de fechas y columnas.
     """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -250,7 +255,7 @@ def cargar_inventario_baja_rotacion():
         df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desc.")
         df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "-")
         
-        # --- FECHAS BLINDADAS ---
+        # --- FECHAS ---
         df['Fecha_Base'] = pd.to_datetime(df['in_date'], errors='coerce')
         df['Fecha_Creacion'] = pd.to_datetime(df['create_date'], errors='coerce')
         df['Fecha_Referencia'] = df['Fecha_Base'].fillna(df['Fecha_Creacion'])
@@ -270,8 +275,8 @@ def cargar_inventario_baja_rotacion():
         
         df['Valor'] = df['quantity'] * df['Costo']
 
-        # 6. AGRUPAR (Incluye Ubicación para no perder columna)
-        # Usamos una lambda para concatenar ubicaciones si un producto está en varias
+        # 6. AGRUPAR
+        # IMPORTANTE: join de ubicaciones para no perderlas
         df_agrupado = df.groupby(['Producto']).agg({
             'quantity': 'sum',
             'Valor': 'sum',
@@ -494,7 +499,7 @@ def cargar_facturacion_estimada_v2(ids_projects, tc_usd):
     except Exception: return pd.DataFrame()
 
 def cargar_metas():
-    """Restaurada V7.1"""
+    """Función restaurada V7.0"""
     if os.path.exists("metas.xlsx"):
         df = pd.read_excel("metas.xlsx")
         df['Mes'] = pd.to_datetime(df['Mes'])
@@ -504,7 +509,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v7.1")
+st.title("🚀 Monitor Comercial ALROTEK v7.2")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -747,6 +752,12 @@ with tab_renta:
             df_horas_detalle = cargar_detalle_horas_mes(ids_seleccionados)
             total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
             
+            # Inventario Baja Rotación (Corrected variable name)
+            with st.spinner("Analizando inventario..."):
+                 df_huesos, msg_status = cargar_inventario_baja_rotacion()
+                 # We don't use df_huesos here, we need inventory *of the project*
+            
+            # Project Inventory (V4)
             df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
             total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
             
@@ -823,32 +834,45 @@ with tab_renta:
             if not df_filtered.empty:
                 st.dataframe(df_filtered[['date', 'name', 'Nombre_Cuenta', 'Clasificacion', 'Monto_Neto']].sort_values(['Clasificacion', 'date'], ascending=True), column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")}, use_container_width=True, hide_index=True)
 
-# === PESTAÑA 4: INVENTARIO ===
+# === PESTAÑA 4: INVENTARIO (BAJA ROTACIÓN) ===
 with tab_inv:
     with st.spinner("Calculando rotación..."):
         df_huesos, msg_status = cargar_inventario_baja_rotacion()
     
+    st.subheader("📦 Análisis de Baja Rotación")
+    
+    if "Error" in msg_status or "No se encontró" in msg_status:
+        st.error(msg_status)
+    else:
+        st.success(msg_status)
+    
     if not df_huesos.empty:
-        st.subheader("⚠️ Detección de Baja Rotación (Productos Hueso)")
-        st.caption(msg_status)
-        
         total_atrapado = df_huesos['Valor'].sum()
-        m1, m2 = st.columns(2)
-        m1.metric("Capital Inmovilizado (BP/Stock)", f"₡ {total_atrapado/1e6:,.1f} M")
-        m2.metric("Items Sin Rotación", len(df_huesos))
+        criticos = df_huesos[df_huesos['Dias_En_Bodega'] > 365]
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Valor Total en Bodega", f"₡ {total_atrapado/1e6:,.1f} M")
+        m2.metric("Items Totales", len(df_huesos))
+        m3.metric("Huesos Críticos (>1 año)", len(criticos), delta_color="inverse")
+        
+        st.divider()
+        
+        dias_min = st.slider("Filtrar por días mínimos de antigüedad:", 0, 720, 365)
+        df_show = df_huesos[df_huesos['Dias_En_Bodega'] >= dias_min]
         
         st.dataframe(
-            df_huesos[['Producto', 'Ubicacion', 'quantity', 'Dias_En_Bodega', 'Valor']],
+            df_show[['Producto', 'Ubicacion', 'quantity', 'Dias_En_Bodega', 'Valor']],
             column_config={
                 "Valor": st.column_config.NumberColumn(format="₡ %.2f"),
-                "quantity": st.column_config.NumberColumn("Cantidad"),
+                "quantity": st.column_config.NumberColumn("Cant."),
                 "Dias_En_Bodega": st.column_config.ProgressColumn("Días Quieto", min_value=0, max_value=720, format="%d días"),
                 "Fecha_Referencia": st.column_config.DateColumn("Fecha Ingreso")
             },
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True
         )
     else:
-        st.info(f"Información: {msg_status}")
+        st.info("No hay stock disponible con los criterios seleccionados.")
 
 # === PESTAÑA 5: CARTERA ===
 with tab_cx:
