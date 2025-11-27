@@ -25,20 +25,22 @@ hide_st_style = """
                 text-align: center;
                 margin-bottom: 10px;
                 box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+                min-height: 100px;
             }
-            .kpi-title { font-size: 0.8rem; font-weight: bold; opacity: 0.9; min-height: 30px; align-items: center; display: flex; justify-content: center;}
-            .kpi-value { font-size: 1.2rem; font-weight: bold; margin-top: 5px; }
+            .kpi-title { font-size: 0.8rem; font-weight: bold; opacity: 0.9; min-height: 35px; align-items: center; display: flex; justify-content: center;}
+            .kpi-value { font-size: 1.3rem; font-weight: bold; margin-top: 5px; }
             .kpi-note { font-size: 0.7rem; opacity: 0.9; margin-top: 5px; font-style: italic;}
             
-            /* COLORES */
+            /* PALETA */
             .bg-green { background-color: #27ae60; }   /* Ventas */
-            .bg-orange { background-color: #e67e22; }  /* Suministros */
+            .bg-orange { background-color: #d35400; }  /* Costo Retail */
             .bg-yellow { background-color: #f1c40f; color: #333 !important; }  /* WIP */
             .bg-blue { background-color: #2980b9; }    /* Instalación */
             .bg-purple { background-color: #8e44ad; }  /* Inventario */
             .bg-red { background-color: #c0392b; }     /* Provisiones */
             .bg-teal { background-color: #16a085; }    /* Compras */
-            .bg-gray { background-color: #7f8c8d; }    /* Ajustes */
+            .bg-gray { background-color: #7f8c8d; }    /* Ajustes/Otros */
+            .bg-light-orange { background-color: #f39c12; } /* Suministros */
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
@@ -51,17 +53,18 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # --- IDs CONTABLES EXACTOS ---
-    IDS_INGRESOS = [580, 384] # 580: Venta Bienes, 384: Servicios
+    # --- IDs CONTABLES SEGÚN IMAGEN DE PRODUCCIÓN ---
+    IDS_INGRESOS = [58, 384]    # 58: Venta Bienes, 384: Servicios
     
-    ID_WIP = 503
-    ID_PROVISION_PROY = 504
-    ID_COSTO_INSTALACION = 399
-    ID_SUMINISTROS_PROY = 400
-    ID_AJUSTES_INV = 395
-    ID_COSTO_RETAIL = 76 
+    ID_COSTO_RETAIL = 76        # Costo mercadería vendida
+    ID_COSTO_INSTALACION = 399  # Costo servicios instalacion
+    ID_SUMINISTROS_PROY = 400   # Suministros e Insumos
+    ID_WIP = 503                # WIP (Proyecto en Proceso)
+    ID_PROVISION_PROY = 504     # Provisión Costo
+    ID_AJUSTES_INV = 395        # Ajustes (Mantenido de solicitud previa)
     
-    TODOS_LOS_IDS = IDS_INGRESOS + [ID_WIP, ID_PROVISION_PROY, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_AJUSTES_INV, ID_COSTO_RETAIL]
+    # Lista para filtrar en la consulta XML-RPC
+    TODOS_LOS_IDS = IDS_INGRESOS + [ID_COSTO_RETAIL, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_WIP, ID_PROVISION_PROY, ID_AJUSTES_INV]
     
 except Exception:
     st.error("❌ Error: No encuentro el archivo .streamlit/secrets.toml")
@@ -79,7 +82,6 @@ def card_kpi(titulo, valor, color_class, nota=""):
         val_fmt = valor
     else:
         val_fmt = f"₡ {valor:,.0f}"
-        
     st.markdown(f"""
     <div class="kpi-card {color_class}">
         <div class="kpi-title">{titulo}</div>
@@ -222,29 +224,32 @@ def cargar_estructura_analitica():
 
 @st.cache_data(ttl=3600)
 def cargar_pnl_contable(anio):
+    """
+    V4.2: Usa los IDs corregidos (58, etc) pero MANTIENE el dominio abierto 
+    para la tabla de diagnóstico por si acaso.
+    """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        dominio_pnl = [['account_id', 'in', TODOS_LOS_IDS], 
-                       ['date', '>=', f'{anio}-01-01'], 
-                       ['date', '<=', f'{anio}-12-31'], 
-                       ['company_id', '=', COMPANY_ID], 
-                       ['parent_state', '=', 'posted'], 
-                       ['analytic_distribution', '!=', False]]
+        dominio_pnl = [
+            ['date', '>=', f'{anio}-01-01'], 
+            ['date', '<=', f'{anio}-12-31'], 
+            ['company_id', '=', COMPANY_ID], 
+            ['parent_state', '=', 'posted'], 
+            ['analytic_distribution', '!=', False]
+        ]
                        
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
         df = pd.DataFrame(registros)
         if not df.empty:
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
-            
-            # CALCULO DE NETO (Crédito - Débito)
-            # Para Ventas: Crédito > Débito -> Neto Positivo
-            # Para Costos: Débito > Crédito -> Neto Negativo
+            df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
             df['Monto_Neto'] = df['credit'] - df['debit']
             
+            # Clasificación con IDs Corregidos
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -254,7 +259,7 @@ def cargar_pnl_contable(anio):
                 if id_acc == ID_SUMINISTROS_PROY: return "Suministros"
                 if id_acc == ID_AJUSTES_INV: return "Ajustes Inv"
                 if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
-                return "Otro"
+                return "Sin Clasificar"
                 
             df['Clasificacion'] = df.apply(clasificar, axis=1)
             
@@ -423,7 +428,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v3.6")
+st.title("🚀 Monitor Comercial ALROTEK v4.2")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -601,131 +606,132 @@ with tab_renta:
     with st.spinner('Analizando P&L...'):
         df_pnl = cargar_pnl_contable(anio_r_sel)
     
-    if not df_pnl.empty:
-        if not df_analitica.empty:
-            mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Plan_Nombre']))
-            mapa_nombres = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Cuenta_Nombre']))
-            df_pnl['Plan_Negocio'] = df_pnl['id_cuenta_analitica'].map(mapa_cuentas).fillna("Sin Plan")
-            df_pnl['Cuenta_Analitica_Nombre'] = df_pnl['id_cuenta_analitica'].map(mapa_nombres).fillna("-")
-        else:
-            df_pnl['Plan_Negocio'] = "Sin Estructura"
-            df_pnl['Cuenta_Analitica_Nombre'] = "-"
+    if not df_analitica.empty:
+        mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Plan_Nombre']))
+        mapa_nombres = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Cuenta_Nombre']))
+        
+        lista_planes = sorted(list(set(mapa_cuentas.values())))
+        
+        # --- DIAGNÓSTICO ---
+        with st.expander("🕵️ Diagnóstico de Cuentas de Ingreso (Ver IDs reales)"):
+            if not df_pnl.empty:
+                df_diag = df_pnl[df_pnl['credit'] > 0][['ID_Cuenta', 'Nombre_Cuenta']].drop_duplicates().sort_values('ID_Cuenta')
+                st.dataframe(df_diag, hide_index=True, use_container_width=True)
+            else:
+                st.warning("No hay movimientos contables.")
 
-        st.subheader("🕵️ Buscador de Proyectos")
+        st.subheader("Buscador de Proyectos")
         c_filt1, c_filt2 = st.columns(2)
         with c_filt1:
-            lista_planes = sorted(df_pnl['Plan_Negocio'].unique().astype(str))
             planes_sel = st.multiselect("1. Selecciona Planes:", lista_planes, default=[])
-        
-        if not planes_sel:
-            st.info("👈 Selecciona un PLAN para ver el desglose detallado.")
-        else:
-            df_temp = df_pnl[df_pnl['Plan_Negocio'].isin(planes_sel)]
+            
+        if planes_sel:
+            ids_cuentas_posibles = [id_c for id_c, plan in mapa_cuentas.items() if plan in planes_sel]
+            nombres_cuentas_posibles = [mapa_nombres[id_c] for id_c in ids_cuentas_posibles]
+            
             with c_filt2:
-                lista_cuentas = sorted(df_temp['Cuenta_Analitica_Nombre'].unique().astype(str))
-                cuentas_sel = st.multiselect("2. Selecciona Analíticas (Opcional):", lista_cuentas, default=lista_cuentas)
+                cuentas_sel_nombres = st.multiselect("2. Selecciona Analíticas (Opcional):", sorted(nombres_cuentas_posibles), default=sorted(nombres_cuentas_posibles))
             
-            df_filtered = df_pnl[
-                (df_pnl['Plan_Negocio'].isin(planes_sel)) & 
-                (df_pnl['Cuenta_Analitica_Nombre'].isin(cuentas_sel))
-            ].copy()
+            ids_seleccionados = [id_c for id_c, nombre in mapa_nombres.items() if nombre in cuentas_sel_nombres]
             
+            df_filtered = pd.DataFrame()
+            if not df_pnl.empty:
+                df_filtered = df_pnl[df_pnl['id_cuenta_analitica'].isin(ids_seleccionados)].copy()
+            
+            # --- CALCULOS ---
+            total_ventas = 0
+            total_instalacion = 0
+            total_suministros = 0
+            total_wip = 0
+            total_provision = 0
+            total_ajustes = 0
+            total_costo_retail = 0
+            total_otros = 0
+
             if not df_filtered.empty:
-                # --- CÁLCULO DE TOTALES (CORREGIDO V3.6: SALDO NETO LUEGO ABSOLUTO) ---
-                # Saldo Neto = Crédito - Débito
-                # Para Ventas: Saldo positivo. Para Costos: Saldo negativo.
-                # Aplicamos abs() al FINAL para mostrar siempre positivo en KPI.
-                
                 total_ventas = abs(df_filtered[df_filtered['Clasificacion'] == 'Venta']['Monto_Neto'].sum())
                 total_instalacion = abs(df_filtered[df_filtered['Clasificacion'] == 'Instalación']['Monto_Neto'].sum())
                 total_suministros = abs(df_filtered[df_filtered['Clasificacion'] == 'Suministros']['Monto_Neto'].sum())
                 total_wip = abs(df_filtered[df_filtered['Clasificacion'] == 'WIP']['Monto_Neto'].sum())
                 total_provision = abs(df_filtered[df_filtered['Clasificacion'] == 'Provisión']['Monto_Neto'].sum())
-                
-                # Ajustes mantiene signo (puede ser + o -)
                 total_ajustes = df_filtered[df_filtered['Clasificacion'] == 'Ajustes Inv']['Monto_Neto'].sum()
-                
-                ids_cuentas_analiticas = df_filtered['id_cuenta_analitica'].dropna().unique().tolist()
-                nombres_cuentas_analiticas = df_filtered['Cuenta_Analitica_Nombre'].unique().tolist()
-                
-                # Horas
-                df_horas_detalle = cargar_detalle_horas_estructura(ids_cuentas_analiticas)
-                total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
-                
-                # Inventario
-                df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuentas_analiticas)
-                total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
-                
-                # Compras Pendientes
-                df_compras = cargar_compras_pendientes(ids_cuentas_analiticas)
-                total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
-                
-                txt_bodegas = "Sin ubicación asignada"
-                color_bg = "bg-purple"
-                if status_stock == "OK" or status_stock == "NO_STOCK":
-                    txt_bodegas = f"Encontradas: {', '.join(bodegas_encontradas)}"
-                elif "ERR" in status_stock:
-                    color_bg = "bg-red"
-                elif status_stock == "NO_BODEGA":
-                    color_bg = "bg-gray"
-                
-                # --- FILA 1 ---
-                k1, k2, k3, k4 = st.columns(4)
-                with k1: card_kpi("Ventas", total_ventas, "bg-green")
-                with k2: card_kpi("Instalación", total_instalacion, "bg-blue")
-                with k3: card_kpi("Suministros", total_suministros, "bg-orange")
-                with k4: card_kpi("WIP Acumulado", total_wip, "bg-yellow")
-                
-                # --- FILA 2 ---
-                k5, k6, k7, k8 = st.columns(4)
-                with k5: card_kpi("Provisiones", total_provision, "bg-red")
-                with k6: card_kpi("Ajustes Inv.", total_ajustes, "bg-gray")
-                with k7: card_kpi("Inventario Sitio", total_stock_sitio, color_bg, nota=txt_bodegas)
-                with k8: card_kpi("Compras Pendientes", total_compras_pendientes, "bg-teal")
-                
-                st.divider()
-                
-                c_horas, c_stock = st.columns(2)
-                with c_horas:
-                    st.markdown("##### 🕒 Desglose de Horas (Shadow Cost)")
-                    if not df_horas_detalle.empty:
-                        resumen_horas = df_horas_detalle.groupby(['Tipo_Hora', 'Multiplicador'])[['Horas', 'Costo']].sum().reset_index()
-                        st.dataframe(resumen_horas, column_config={"Costo": st.column_config.NumberColumn(format="₡ %.2f"), "Multiplicador": st.column_config.NumberColumn(format="x %.1f")}, hide_index=True, use_container_width=True)
-                        
-                        with st.expander("🕵️ Auditoría Detallada de Horas"):
-                            df_audit = df_horas_detalle[['date', 'Empleado', 'name', 'Tipo_Hora', 'Horas', 'Costo']].sort_values('date', ascending=False)
-                            st.dataframe(df_audit, use_container_width=True)
-                            st.download_button("📥 Descargar", data=convert_df_to_excel(df_audit), file_name="Auditoria_Horas.xlsx")
-                    else: st.caption("Sin registros.")
-                
-                with c_stock:
-                    st.markdown("##### 📦 Detalle Inventario / Compras")
-                    tab_inv_det, tab_com_det = st.tabs(["Inventario Físico", "Compras Pendientes"])
+                total_costo_retail = abs(df_filtered[df_filtered['Clasificacion'] == 'Costo Retail']['Monto_Neto'].sum())
+                total_otros = abs(df_filtered[df_filtered['Clasificacion'] == 'Sin Clasificar']['Monto_Neto'].sum())
+            
+            df_horas_detalle = cargar_detalle_horas_estructura(ids_seleccionados)
+            total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
+            
+            df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
+            total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
+            
+            df_compras = cargar_compras_pendientes(ids_seleccionados)
+            total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
+            
+            txt_bodegas = "Sin ubicación asignada"
+            color_bg = "bg-purple"
+            if status_stock == "OK" or status_stock == "NO_STOCK":
+                txt_bodegas = f"Encontradas: {', '.join(bodegas_encontradas)}"
+            elif "ERR" in status_stock:
+                color_bg = "bg-red"
+            elif status_stock == "NO_BODEGA":
+                color_bg = "bg-gray"
+            
+            # --- FILA 1 (4 Cols) ---
+            k1, k2, k3, k4 = st.columns(4)
+            with k1: card_kpi("Ventas", total_ventas, "bg-green")
+            with k2: card_kpi("Instalación", total_instalacion, "bg-blue")
+            with k3: card_kpi("Suministros", total_suministros, "bg-light-orange")
+            with k4: card_kpi("WIP Acumulado", total_wip, "bg-yellow")
+            
+            # --- FILA 2 (4 Cols) ---
+            k5, k6, k7, k8 = st.columns(4)
+            with k5: card_kpi("Provisiones", total_provision, "bg-red")
+            with k6: card_kpi("Ajustes Inv.", total_ajustes, "bg-gray")
+            with k7: card_kpi("Costo Retail (Mercadería)", total_costo_retail, "bg-orange") 
+            with k8: card_kpi("Otros / Sin Clasificar", total_otros, "bg-gray", nota="Verificar en Tabla Diagnóstico")
+            
+            # --- FILA 3 (3 Cols) ---
+            k9, k10, k11 = st.columns(3)
+            with k9: card_kpi("Inventario Sitio", total_stock_sitio, color_bg, nota=txt_bodegas)
+            with k10: card_kpi("Compras Pendientes", total_compras_pendientes, "bg-teal")
+            with k11: card_kpi("Costo Horas (Ajustado)", total_horas_ajustado, "bg-blue")
+            
+            st.divider()
+            
+            c_horas, c_stock = st.columns(2)
+            with c_horas:
+                st.markdown("##### 🕒 Desglose de Horas (Shadow Cost)")
+                if not df_horas_detalle.empty:
+                    resumen_horas = df_horas_detalle.groupby(['Tipo_Hora', 'Multiplicador'])[['Horas', 'Costo']].sum().reset_index()
+                    st.dataframe(resumen_horas, column_config={"Costo": st.column_config.NumberColumn(format="₡ %.2f"), "Multiplicador": st.column_config.NumberColumn(format="x %.1f")}, hide_index=True, use_container_width=True)
                     
-                    with tab_inv_det:
-                        if not df_stock_sitio.empty:
-                            st.dataframe(df_stock_sitio[['pname', 'quantity', 'Valor_Total']], 
-                                         column_config={
-                                             "pname": "Producto",
-                                             "Valor_Total": st.column_config.NumberColumn(format="₡ %.2f")
-                                         }, 
-                                         hide_index=True, use_container_width=True)
-                        else: st.caption(f"Estado: {status_stock}")
-                    
-                    with tab_com_det:
-                        if not df_compras.empty:
-                            st.dataframe(df_compras, column_config={"Monto_Pendiente": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
-                        else: st.caption("Todo facturado.")
-
-                st.divider()
-                st.markdown("**Detalle Movimientos Contables (P&L)**")
-                st.dataframe(
-                    df_filtered[['date', 'name', 'Cuenta_Analitica_Nombre', 'Clasificacion', 'Monto_Neto']].sort_values('date', ascending=False),
-                    column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")},
-                    use_container_width=True, hide_index=True
-                )
-            else: st.warning("Sin datos.")
-    else: st.warning("Sin movimientos analíticos.")
+                    with st.expander("🕵️ Auditoría Detallada de Horas"):
+                        df_audit = df_horas_detalle[['date', 'Empleado', 'name', 'Tipo_Hora', 'Horas', 'Costo']].sort_values('date', ascending=False)
+                        st.dataframe(df_audit, use_container_width=True)
+                        st.download_button("📥 Descargar", data=convert_df_to_excel(df_audit), file_name="Auditoria_Horas.xlsx")
+                else: st.caption("Sin registros.")
+            
+            with c_stock:
+                st.markdown("##### 📦 Detalle Inventario / Compras")
+                tab_inv_det, tab_com_det = st.tabs(["Inventario Físico", "Compras Pendientes"])
+                with tab_inv_det:
+                    if not df_stock_sitio.empty:
+                        st.dataframe(df_stock_sitio[['pname', 'quantity', 'Valor_Total']], column_config={"pname": "Producto", "Valor_Total": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
+                    else: st.caption(f"Estado: {status_stock}")
+                with tab_com_det:
+                    if not df_compras.empty:
+                        st.dataframe(df_compras, column_config={"Monto_Pendiente": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
+                    else: st.caption("Todo facturado.")
+            
+            st.divider()
+            st.markdown("**Detalle Movimientos Contables (P&L)**")
+            if not df_filtered.empty:
+                st.dataframe(df_filtered[['date', 'name', 'Nombre_Cuenta', 'Clasificacion', 'Monto_Neto']].sort_values('date', ascending=False), column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")}, use_container_width=True, hide_index=True)
+            
+            # --- DIAGNÓSTICO ---
+            with st.expander("🕵️ Diagnóstico de Cuentas"):
+                 if not df_pnl.empty:
+                     st.dataframe(df_pnl[['ID_Cuenta', 'Nombre_Cuenta']].drop_duplicates().sort_values('ID_Cuenta'), hide_index=True, use_container_width=True)
 
 # === PESTAÑA 4: INVENTARIO ===
 with tab_inv:
