@@ -181,7 +181,6 @@ def cargar_detalle_productos():
 
 @st.cache_data(ttl=3600)
 def cargar_inventario_general():
-    """Inventario para pestaña Productos"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -204,8 +203,7 @@ def cargar_inventario_general():
 @st.cache_data(ttl=3600)
 def cargar_inventario_baja_rotacion():
     """
-    V7.1: Inventario Baja Rotación (Huesos).
-    Corrección: Manejo de fechas vacías (False) con errors='coerce'.
+    V7.1: Inventario Baja Rotación (Huesos) - CORREGIDA.
     """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -252,17 +250,13 @@ def cargar_inventario_baja_rotacion():
         df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desc.")
         df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "-")
         
-        # --- CORRECCIÓN DE FECHAS AQUÍ ---
-        # Usamos errors='coerce' para que convierta los 'False' de Odoo en NaT (Not a Time) sin fallar
+        # --- FECHAS BLINDADAS ---
         df['Fecha_Base'] = pd.to_datetime(df['in_date'], errors='coerce')
         df['Fecha_Creacion'] = pd.to_datetime(df['create_date'], errors='coerce')
-        
-        # Rellenar fechas vacías con una fecha por defecto (ej: 2020) o la de creación
         df['Fecha_Referencia'] = df['Fecha_Base'].fillna(df['Fecha_Creacion'])
         df['Fecha_Referencia'] = df['Fecha_Referencia'].fillna(pd.Timestamp('2020-01-01'))
-        # ---------------------------------
         
-        # 5. Traer Costos y Filtrar Kits
+        # 5. Traer Costos
         ids_prods = df['pid'].unique().tolist()
         prod_details = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'product_tmpl_id']})
         df_prod_info = pd.DataFrame(prod_details)
@@ -276,11 +270,13 @@ def cargar_inventario_baja_rotacion():
         
         df['Valor'] = df['quantity'] * df['Costo']
 
-        # 6. Agrupar
+        # 6. AGRUPAR (Incluye Ubicación para no perder columna)
+        # Usamos una lambda para concatenar ubicaciones si un producto está en varias
         df_agrupado = df.groupby(['Producto']).agg({
             'quantity': 'sum',
             'Valor': 'sum',
-            'Fecha_Referencia': 'max'
+            'Fecha_Referencia': 'max',
+            'Ubicacion': lambda x: ", ".join(sorted(set(str(v) for v in x if v)))
         }).reset_index()
         
         df_agrupado['Dias_En_Bodega'] = (pd.Timestamp.now() - df_agrupado['Fecha_Referencia']).dt.days
@@ -313,7 +309,6 @@ def cargar_estructura_analitica():
 
 @st.cache_data(ttl=3600)
 def cargar_pnl_historico():
-    """P&L Histórico sin filtro de año"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -335,6 +330,7 @@ def cargar_pnl_historico():
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
             df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
             df['Monto_Neto'] = df['credit'] - df['debit']
+            
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -358,7 +354,6 @@ def cargar_pnl_historico():
 
 @st.cache_data(ttl=900)
 def cargar_detalle_horas_mes(ids_cuentas_analiticas):
-    """Horas MES ACTUAL"""
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -499,7 +494,7 @@ def cargar_facturacion_estimada_v2(ids_projects, tc_usd):
     except Exception: return pd.DataFrame()
 
 def cargar_metas():
-    """Función restaurada V7.0"""
+    """Restaurada V7.1"""
     if os.path.exists("metas.xlsx"):
         df = pd.read_excel("metas.xlsx")
         df['Mes'] = pd.to_datetime(df['Mes'])
@@ -509,7 +504,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v7.0")
+st.title("🚀 Monitor Comercial ALROTEK v7.1")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -752,8 +747,6 @@ with tab_renta:
             df_horas_detalle = cargar_detalle_horas_mes(ids_seleccionados)
             total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
             
-            df_stock_sitio, status_stock = cargar_inventario_baja_rotacion() # OJO: Esto es para todos, no solo proyecto.
-            # Corrección: Inventario de Proyecto especifico
             df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
             total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
             
@@ -1033,4 +1026,3 @@ with tab_det:
                         df_hist = df_prod_cli.groupby(['date', 'Producto'])[['quantity', 'Venta_Neta']].sum().reset_index().sort_values('date', ascending=False)
                         st.download_button("📥 Descargar Historial", data=convert_df_to_excel(df_hist), file_name=f"Historial_{cliente_sel}.xlsx")
                     else: st.info("No hay detalle de productos.")
-
