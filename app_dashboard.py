@@ -54,7 +54,7 @@ try:
     PASSWORD = st.secrets["odoo"]["password"]
     COMPANY_ID = st.secrets["odoo"]["company_id"]
     
-    # --- IDs CONTABLES (PRODUCCIÓN) ---
+    # IDs CONTABLES
     IDS_INGRESOS = [58, 384]     
     ID_COSTO_RETAIL = 76         
     ID_COSTO_INSTALACION = 399   
@@ -223,11 +223,15 @@ def cargar_estructura_analitica():
 
 @st.cache_data(ttl=3600)
 def cargar_pnl_historico():
+    """
+    Descarga P&L HISTÓRICO (Sin límite de fecha) y todas las cuentas (incluso gastos 6%).
+    """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
+        # Traer IDs de cuentas de Gasto (6%)
         ids_gastos = models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])
         ids_totales = list(set(TODOS_LOS_IDS + ids_gastos))
         
@@ -237,6 +241,7 @@ def cargar_pnl_historico():
             ['parent_state', '=', 'posted'], 
             ['analytic_distribution', '!=', False]
         ]
+        
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
         df = pd.DataFrame(registros)
@@ -254,7 +259,8 @@ def cargar_pnl_historico():
                 if id_acc == ID_SUMINISTROS_PROY: return "Suministros"
                 if id_acc == ID_AJUSTES_INV: return "Ajustes Inv"
                 if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
-                return "Otros Gastos"
+                return "Otros Gastos" # Cuentas 6%
+                
             df['Clasificacion'] = df.apply(clasificar, axis=1)
             def get_analytic_id(dist):
                 if not dist: return None
@@ -397,59 +403,53 @@ def cargar_compras_pendientes_v7_json_scanner(ids_cuentas_analiticas, tc_usd):
         return df_filtrado[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
     except Exception: return pd.DataFrame()
 
+# --- NUEVA FUNCIÓN V6.0: FACTURACIÓN ESTIMADA ---
 @st.cache_data(ttl=900)
-def cargar_facturacion_estimada_v2(ids_projects, tc_usd):
-    """
-    VERSION 6.3 (ROBUSTA): Filtra proyectos en PYTHON, no en SQL.
-    Trae todas las facturas pendientes y busca el nombre del proyecto en el campo de enlace.
-    """
+def cargar_facturacion_estimada(ids_projects, tc_usd):
     try:
         if not ids_projects: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # 1. Obtener nombres de proyectos a buscar
         ids_clean = [int(x) for x in ids_projects if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
         
+        # 1. Obtener NOMBRES de proyectos
         proyectos_data = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'read', [ids_clean], {'fields': ['name']})
         nombres_proyectos = [p['name'] for p in proyectos_data if p['name']]
         if not nombres_proyectos: return pd.DataFrame()
         
-        # 2. Descargar TODO lo pendiente (Fuerza Bruta)
-        dominio = [['x_studio_facturado', '=', False]]
-        campos = ['x_name', 'x_Monto', 'x_Fecha', 'x_studio_field_sFPxe']
+        # 2. Buscar por texto (fuzzy)
+        nombre_buscar = nombres_proyectos[0] # Tomamos el primero
+        dominio = [['x_studio_field_sFPxe', 'ilike', nombre_buscar], ['x_studio_facturado', '=', False]]
+        
+        # CAMPOS CORREGIDOS
+        campos = ['x_name', 'x_Monto', 'x_Fecha'] 
         
         ids = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'read', [ids], {'fields': campos})
         
         df = pd.DataFrame(registros)
-        if df.empty: return pd.DataFrame()
-        
-        # 3. Filtrar en Python (Fuzzy Match)
-        def es_mi_proyecto(valor_campo):
-            # El campo puede ser String "Proyecto X" o Lista [ID, "Proyecto X"]
-            txt = str(valor_campo)
-            for nombre_real in nombres_proyectos:
-                # Buscamos si el nombre del proyecto seleccionado está contenido en el campo
-                if nombre_real in txt: return True
-            return False
-            
-        df['Es_Mio'] = df['x_studio_field_sFPxe'].apply(es_mi_proyecto)
-        df_final = df[df['Es_Mio']].copy()
-        
-        if not df_final.empty:
-            df_final['Monto_CRC'] = df_final['x_Monto'] * tc_usd
-            df_final['Hito'] = df_final['x_name'] if 'x_name' in df_final.columns else "Hito"
-            return df_final
-            
+        if not df.empty:
+            df['Monto_CRC'] = df['x_Monto'] * tc_usd
+            df['Hito'] = df['x_name'] if 'x_name' in df.columns else "Hito"
+            return df
         return pd.DataFrame()
-
     except Exception: return pd.DataFrame()
 
+# --- FUNCIÓN RESTAURADA ---
+def cargar_metas():
+    if os.path.exists("metas.xlsx"):
+        df = pd.read_excel("metas.xlsx")
+        df['Mes'] = pd.to_datetime(df['Mes'])
+        df['Mes_Num'] = df['Mes'].dt.month
+        df['Anio'] = df['Mes'].dt.year
+        return df
+    return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
+
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v6.3")
+st.title("🚀 Monitor Comercial ALROTEK v6.4")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -651,7 +651,7 @@ with tab_renta:
             
             ids_seleccionados = [id_c for id_c, nombre in mapa_nombres.items() if nombre in cuentas_sel_nombres]
             
-            # Buscar IDs de Proyectos (Bridge Analytic -> Project) para usar en modelo facturas
+            # Buscar IDs de Proyectos (Bridge Analytic -> Project)
             ids_projects = []
             try:
                 common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -698,8 +698,8 @@ with tab_renta:
             df_compras = cargar_compras_pendientes_v7_json_scanner(ids_seleccionados, tc_usd)
             total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
             
-            # --- NUEVA CARGA: FACTURACIÓN ESTIMADA ---
-            df_fact_estimada = cargar_facturacion_estimada_v2(ids_projects, tc_usd)
+            # Facturación Estimada
+            df_fact_estimada = cargar_facturacion_estimada(ids_projects, tc_usd)
             total_fact_pendiente = df_fact_estimada['Monto_CRC'].sum() if not df_fact_estimada.empty else 0
             
             txt_bodegas = "Sin ubicación asignada"
