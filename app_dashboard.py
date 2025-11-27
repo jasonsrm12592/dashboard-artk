@@ -10,7 +10,7 @@ import ast
 
 # --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
 st.set_page_config(
-    page_title="Alrotek Monitor v9.3", 
+    page_title="Alrotek Monitor v9.4", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -60,7 +60,6 @@ st.markdown("""
         color: #95a5a6;
     }
     
-    /* Colores bordes */
     .border-green { border-left: 4px solid #27ae60; }
     .border-orange { border-left: 4px solid #d35400; }
     .border-yellow { border-left: 4px solid #f1c40f; }
@@ -448,26 +447,41 @@ with tab_kpis:
         st.divider()
         st.download_button("📥 Descargar", data=convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Provincia', 'Venta_Neta']]), file_name=f"Ventas_{anio_sel}.xlsx")
 
-        c_graf1, c_graf2 = st.columns(2)
+        # --- SEPARACIÓN DE GRÁFICOS SOLICITADA ---
+        c_graf_meta, c_graf_comp = st.columns(2)
         
-        # 4. FIX: Gráfico Comparativo Mensual (Año Actual vs Anterior)
-        with c_graf1:
-            st.subheader("🗓️ Comparativo Mensual (Año vs Año)")
+        # Gráfico 1: Cumplimiento de Meta (SOLO Año Seleccionado)
+        with c_graf_meta:
+            st.subheader(f"🎯 Cumplimiento de Meta ({anio_sel})")
             v_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
-            v_ant_g = df_ant.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
             v_meta = df_metas[df_metas['Anio'] == anio_sel].groupby('Mes_Num')['Meta'].sum().reset_index()
             
-            df_chart = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_ant_g, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
-            df_chart['Mes'] = df_chart['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
+            df_gm = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
+            df_gm['Mes'] = df_gm['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
             
-            fig = go.Figure()
-            fig.add_trace(go.Bar(x=df_chart['Mes'], y=df_chart['Actual'], name='Actual', marker_color='#2980b9'))
-            fig.add_trace(go.Bar(x=df_chart['Mes'], y=df_chart['Anterior'], name='Anterior', marker_color='#95a5a6'))
-            fig.add_trace(go.Scatter(x=df_chart['Mes'], y=df_chart['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
-            st.plotly_chart(config_plotly(fig), use_container_width=True)
+            colores = ['#2ecc71' if r >= m else '#e74c3c' for r, m in zip(df_gm['Actual'], df_gm['Meta'])]
+            fig_m = go.Figure()
+            fig_m.add_trace(go.Bar(x=df_gm['Mes'], y=df_gm['Actual'], name='Actual', marker_color=colores))
+            fig_m.add_trace(go.Scatter(x=df_gm['Mes'], y=df_gm['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
+            st.plotly_chart(config_plotly(fig_m), use_container_width=True)
 
-        # 2. FIX: Gráfico por Plan Analítico Mensual
-        with c_graf2:
+        # Gráfico 2: Comparativo Año Actual vs Anterior (Sin Meta)
+        with c_graf_comp:
+            st.subheader("🗓️ Año Actual vs Anterior")
+            v_ant_g = df_ant.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
+            
+            df_gc = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_ant_g, on='Mes_Num', how='left').fillna(0)
+            df_gc['Mes'] = df_gc['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
+            
+            fig_c = go.Figure()
+            fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Actual'], name=f'{anio_sel}', marker_color='#2980b9'))
+            fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Anterior'], name=f'{anio_sel-1}', marker_color='#95a5a6'))
+            st.plotly_chart(config_plotly(fig_c), use_container_width=True)
+
+        c_graf_mix, c_graf_top = st.columns(2)
+        
+        # Gráfico 3: Mix por Plan
+        with c_graf_mix:
             st.subheader("📊 Mix de Ventas por Plan")
             if not df_prod.empty:
                 df_l = df_prod[df_prod['date'].dt.year == anio_sel].copy()
@@ -482,21 +496,22 @@ with tab_kpis:
                 df_grp = df_l.groupby(['Mes_Num','Mes','Plan'])['Venta_Neta'].sum().reset_index().sort_values('Mes_Num')
                 st.plotly_chart(config_plotly(px.bar(df_grp, x='Mes', y='Venta_Neta', color='Plan', title="")), use_container_width=True)
 
-        # 3. FIX: Top Vendedores con Delta vs Año Anterior
-        st.subheader("🏆 Top Vendedores (vs Año Anterior)")
-        r_act = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
-        r_ant = df_ant.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
-        r_fin = pd.merge(r_act, r_ant, on='Vendedor', how='left').fillna(0)
-        r_fin = r_fin.sort_values('Actual', ascending=True).tail(10)
-        
-        def txt(row):
-            delta = ((row['Actual'] - row['Anterior']) / row['Anterior'] * 100) if row['Anterior']>0 else 100
-            icon = "⬆️" if delta >= 0 else "⬇️"
-            return f"₡{row['Actual']/1e6:.1f}M {icon} {delta:.0f}%"
-        
-        r_fin['Texto'] = r_fin.apply(txt, axis=1)
-        fig_v = go.Figure(go.Bar(x=r_fin['Actual'], y=r_fin['Vendedor'], orientation='h', text=r_fin['Texto'], textposition='auto', marker_color='#2ecc71'))
-        st.plotly_chart(config_plotly(fig_v), use_container_width=True)
+        # Gráfico 4: Top Vendedores
+        with c_graf_top:
+            st.subheader("🏆 Top Vendedores (vs Año Anterior)")
+            r_act = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
+            r_ant = df_ant.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
+            r_fin = pd.merge(r_act, r_ant, on='Vendedor', how='left').fillna(0)
+            r_fin = r_fin.sort_values('Actual', ascending=True).tail(10)
+            
+            def txt(row):
+                delta = ((row['Actual'] - row['Anterior']) / row['Anterior'] * 100) if row['Anterior']>0 else 100
+                icon = "⬆️" if delta >= 0 else "⬇️"
+                return f"₡{row['Actual']/1e6:.1f}M {icon} {delta:.0f}%"
+            
+            r_fin['Texto'] = r_fin.apply(txt, axis=1)
+            fig_v = go.Figure(go.Bar(x=r_fin['Actual'], y=r_fin['Vendedor'], orientation='h', text=r_fin['Texto'], textposition='auto', marker_color='#2ecc71'))
+            st.plotly_chart(config_plotly(fig_v), use_container_width=True)
 
 # === PESTAÑA 2: PRODUCTOS ===
 with tab_prod:
