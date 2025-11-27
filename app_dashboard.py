@@ -181,6 +181,7 @@ def cargar_detalle_productos():
 
 @st.cache_data(ttl=3600)
 def cargar_inventario_general():
+    """Inventario para pestaña Productos"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -189,17 +190,12 @@ def cargar_inventario_general():
         except: ids_kits = []
         dominio = [['active', '=', True]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'create_date', 'default_code', 'product_tmpl_id']})
+        registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'create_date', 'default_code']})
         df = pd.DataFrame(registros)
         if not df.empty:
             df['create_date'] = pd.to_datetime(df['create_date'])
             df['Valor_Inventario'] = df['qty_available'] * df['standard_price']
             df.rename(columns={'id': 'ID_Producto', 'name': 'Producto', 'qty_available': 'Stock', 'standard_price': 'Costo', 'default_code': 'Referencia'}, inplace=True)
-            df['tmpl_id'] = df['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
-            if ids_kits:
-                # Necesitamos ids de templates de kits
-                # Simplicamos: Si no usamos kits en la visualización general, no filtramos aquí para no sobrecargar
-                pass
             tipo_map = {'product': 'Almacenable', 'service': 'Servicio', 'consu': 'Consumible'}
             df['Tipo'] = df['detailed_type'].map(tipo_map).fillna('Otro')
         return df
@@ -208,64 +204,48 @@ def cargar_inventario_general():
 @st.cache_data(ttl=3600)
 def cargar_inventario_baja_rotacion():
     """
-    V6.9: Inventario Baja Rotación (Huesos).
-    - Filtro estricto: 'BP/Stock' + child_of.
-    - Antigüedad: Basada en ÚLTIMO INGRESO (max in_date).
-    - Excluye Kits.
+    Inventario Baja Rotación (Pestaña Huesos).
+    Filtro: BP/Stock + child_of. Antigüedad: Max in_date. No Kits.
     """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # 1. Detectar Kits
         try:
             ids_bom_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
             data_boms = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'read', [ids_bom_kits], {'fields': ['product_tmpl_id']})
             ids_tmpl_kits = [b['product_tmpl_id'][0] for b in data_boms if b['product_tmpl_id']]
         except: ids_tmpl_kits = []
         
-        # 2. Encontrar Ubicación BP/Stock
         dominio_loc = [
             ['complete_name', 'ilike', 'BP/Stock'],
             ['usage', '=', 'internal'],
             ['company_id', '=', COMPANY_ID]
         ]
         ids_locs_raiz = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
+        if not ids_locs_raiz: return pd.DataFrame(), "No se encontraron bodegas 'BP/Stock'"
         
-        if not ids_locs_raiz: 
-            return pd.DataFrame(), "❌ No se encontró ubicación 'BP/Stock'."
-            
         info_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_locs_raiz], {'fields': ['complete_name']})
         nombres_bodegas = [l['complete_name'] for l in info_locs]
 
-        # 3. Buscar Quants (Recursivo child_of)
         dominio_quant = [
             ['location_id', 'child_of', ids_locs_raiz], 
             ['quantity', '>', 0],
             ['company_id', '=', COMPANY_ID]
         ]
-        
-        # in_date = Fecha de entrada del paquete
         campos_quant = ['product_id', 'quantity', 'location_id', 'in_date', 'create_date']
-        
         ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
         data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': campos_quant})
         
         df = pd.DataFrame(data_quants)
         if df.empty: return pd.DataFrame(), f"Bodegas ({nombres_bodegas}) vacías."
         
-        # 4. Procesamiento
         df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
         df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desc.")
         df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "-")
+        df['Fecha_Referencia'] = pd.to_datetime(df['in_date']).fillna(pd.to_datetime(df['create_date']))
         
-        # Fechas: Fallback a create_date si in_date es null
-        df['Fecha_Base'] = pd.to_datetime(df['in_date'])
-        df['Fecha_Creacion'] = pd.to_datetime(df['create_date'])
-        df['Fecha_Referencia'] = df['Fecha_Base'].fillna(df['Fecha_Creacion'])
-        
-        # 5. Traer Costos y Filtrar Kits
         ids_prods = df['pid'].unique().tolist()
         prod_details = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'product_tmpl_id']})
         df_prod_info = pd.DataFrame(prod_details)
@@ -279,24 +259,16 @@ def cargar_inventario_baja_rotacion():
         
         df['Valor'] = df['quantity'] * df['Costo']
 
-        # 6. AGRUPAR POR PRODUCTO -> TOMAR FECHA MÁS RECIENTE (MAX)
-        # Si tengo un lote de 2020 y uno de 2025, el producto NO es hueso.
-        # Tomamos max(Fecha_Referencia) -> Fecha más nueva.
-        # Días en Bodega = Hoy - Fecha Más Nueva.
-        
         df_agrupado = df.groupby(['Producto']).agg({
             'quantity': 'sum',
             'Valor': 'sum',
-            'Fecha_Referencia': 'max' # <--- ÚLTIMO INGRESO
+            'Fecha_Referencia': 'max'
         }).reset_index()
         
         df_agrupado['Dias_En_Bodega'] = (pd.Timestamp.now() - df_agrupado['Fecha_Referencia']).dt.days
-        
-        # Ordenar
         df_huesos = df_agrupado.sort_values('Dias_En_Bodega', ascending=False)
         
         return df_huesos, f"Filtro: {', '.join(nombres_bodegas)}"
-
     except Exception as e: return pd.DataFrame(), f"Error: {e}"
 
 @st.cache_data(ttl=3600)
@@ -322,6 +294,7 @@ def cargar_estructura_analitica():
 
 @st.cache_data(ttl=3600)
 def cargar_pnl_historico():
+    """P&L Histórico sin filtro de año"""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
@@ -343,7 +316,6 @@ def cargar_pnl_historico():
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
             df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
             df['Monto_Neto'] = df['credit'] - df['debit']
-            
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -367,6 +339,7 @@ def cargar_pnl_historico():
 
 @st.cache_data(ttl=900)
 def cargar_detalle_horas_mes(ids_cuentas_analiticas):
+    """Horas MES ACTUAL"""
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -506,8 +479,18 @@ def cargar_facturacion_estimada_v2(ids_projects, tc_usd):
         return pd.DataFrame()
     except Exception: return pd.DataFrame()
 
+def cargar_metas():
+    """Función restaurada V7.0"""
+    if os.path.exists("metas.xlsx"):
+        df = pd.read_excel("metas.xlsx")
+        df['Mes'] = pd.to_datetime(df['Mes'])
+        df['Mes_Num'] = df['Mes'].dt.month
+        df['Anio'] = df['Mes'].dt.year
+        return df
+    return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
+
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v6.9")
+st.title("🚀 Monitor Comercial ALROTEK v7.0")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
