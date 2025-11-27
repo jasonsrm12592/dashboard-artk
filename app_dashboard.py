@@ -10,7 +10,7 @@ import ast
 
 # --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
 st.set_page_config(
-    page_title="Alrotek Monitor v9.6", 
+    page_title="Alrotek Monitor v9.7", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -21,14 +21,14 @@ st.markdown("""
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-    .block-container {padding-top: 1rem; padding-bottom: 2rem;}
+    .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
     
     .kpi-card {
         background-color: white;
         border-radius: 10px;
         padding: 15px;
         margin-bottom: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
         border: 1px solid #e0e0e0;
         text-align: center;
         color: #444;
@@ -38,36 +38,37 @@ st.markdown("""
         justify-content: center;
     }
     .kpi-title {
-        font-size: 0.85rem;
+        font-size: 0.8rem;
         text-transform: uppercase;
         letter-spacing: 0.5px;
         color: #7f8c8d;
         margin-bottom: 8px;
-        font-weight: 700;
+        font-weight: 600;
+        min-height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
     }
     .kpi-value {
-        font-size: 1.5rem;
-        font-weight: 800;
+        font-size: 1.4rem;
+        font-weight: 700;
         color: #2c3e50;
         margin-bottom: 4px;
     }
     .kpi-note {
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         color: #95a5a6;
     }
     
-    /* Bordes de color */
-    .border-green { border-left: 5px solid #27ae60; }
-    .border-orange { border-left: 5px solid #d35400; }
-    .border-yellow { border-left: 5px solid #f1c40f; }
-    .border-blue { border-left: 5px solid #2980b9; }
-    .border-purple { border-left: 5px solid #8e44ad; }
-    .border-red { border-left: 5px solid #c0392b; }
-    .border-teal { border-left: 5px solid #16a085; }
-    .border-cyan { border-left: 5px solid #1abc9c; }
-    .border-gray { border-left: 5px solid #7f8c8d; }
-    
-    /* Clase especial para destacar Meta */
+    .border-green { border-left: 4px solid #27ae60; }
+    .border-orange { border-left: 4px solid #d35400; }
+    .border-yellow { border-left: 4px solid #f1c40f; }
+    .border-blue { border-left: 4px solid #2980b9; }
+    .border-purple { border-left: 4px solid #8e44ad; }
+    .border-red { border-left: 4px solid #c0392b; }
+    .border-teal { border-left: 4px solid #16a085; }
+    .border-cyan { border-left: 4px solid #1abc9c; }
+    .border-gray { border-left: 4px solid #7f8c8d; }
     .bg-dark-blue { background-color: #f0f8ff; border-left: 5px solid #000080; }
 </style>
 """, unsafe_allow_html=True)
@@ -101,7 +102,6 @@ def convert_df_to_excel(df, sheet_name='Datos'):
     return output.getvalue()
 
 def card_kpi(titulo, valor, color_class, nota="", formato="moneda"):
-    # Forzar conversión a float si es numérico para evitar errores de formato
     try:
         val_float = float(valor)
         es_numero = True
@@ -110,12 +110,11 @@ def card_kpi(titulo, valor, color_class, nota="", formato="moneda"):
         val_fmt = str(valor)
 
     if es_numero:
-        if formato == "moneda":
-            val_fmt = f"₡ {val_float:,.0f}"
-        elif formato == "numero":
-            val_fmt = f"{val_float:,.0f}"
-        else:
-            val_fmt = str(valor)
+        if formato == "moneda": val_fmt = f"₡ {val_float:,.0f}"
+        elif formato == "numero": val_fmt = f"{val_float:,.0f}"
+        else: val_fmt = str(valor)
+    else:
+        val_fmt = str(valor)
         
     st.markdown(f"""
     <div class="kpi-card {color_class}">
@@ -153,9 +152,15 @@ def cargar_datos_generales():
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
             df['Mes'] = df['invoice_date'].dt.to_period('M').dt.to_timestamp()
             df['Mes_Num'] = df['invoice_date'].dt.month
+            
+            # Limpieza segura para Arrow
             df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
             df['ID_Cliente'] = df['partner_id'].apply(lambda x: x[0] if x else 0)
             df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
+            
+            # Eliminar columnas complejas
+            df = df.drop(columns=['partner_id', 'invoice_user_id'], errors='ignore')
+            
             df['Venta_Neta'] = df['amount_untaxed_signed']
             df = df[~df['name'].str.contains("WT-", case=False, na=False)]
         return df
@@ -174,8 +179,14 @@ def cargar_cartera():
         if not df.empty:
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
             df['invoice_date_due'] = pd.to_datetime(df['invoice_date_due'])
+            
+            # Limpieza
             df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
             df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
+            
+            # Eliminar columnas complejas
+            df = df.drop(columns=['partner_id', 'invoice_user_id'], errors='ignore')
+            
             df['Dias_Vencido'] = (pd.Timestamp.now() - df['invoice_date_due']).dt.days
             def bucket(d): return "Por Vencer" if d < 0 else ("0-30" if d<=30 else ("31-60" if d<=60 else ("61-90" if d<=90 else "+90")))
             df['Antiguedad'] = df['Dias_Vencido'].apply(bucket)
@@ -197,6 +208,10 @@ def cargar_datos_clientes_extendido(ids_clientes):
             def procesar_campo_studio(valor): return str(valor[1]) if isinstance(valor, list) else (str(valor) if valor else "No Definido")
             df['Zona_Comercial'] = df['x_studio_zona'].apply(procesar_campo_studio) if 'x_studio_zona' in df.columns else "N/A"
             df['Categoria_Cliente'] = df['x_studio_categoria_cliente'].apply(procesar_campo_studio) if 'x_studio_categoria_cliente' in df.columns else "N/A"
+            
+            # Limpieza
+            df = df.drop(columns=['state_id', 'x_studio_zona', 'x_studio_categoria_cliente'], errors='ignore')
+            
             df.rename(columns={'id': 'ID_Cliente'}, inplace=True)
             return df[['ID_Cliente', 'Provincia', 'Zona_Comercial', 'Categoria_Cliente']]
         return pd.DataFrame()
@@ -218,6 +233,10 @@ def cargar_detalle_productos():
             df['ID_Factura'] = df['move_id'].apply(lambda x: x[0] if x else 0)
             df['ID_Producto'] = df['product_id'].apply(lambda x: x[0] if x else 0)
             df['Producto'] = df['product_id'].apply(lambda x: x[1] if x else "Otros")
+            
+            # Limpieza
+            df = df.drop(columns=['product_id', 'move_id'], errors='ignore')
+            
             df['Venta_Neta'] = df['credit'] - df['debit']
         return df
     except: return pd.DataFrame()
@@ -253,9 +272,15 @@ def cargar_inventario_baja_rotacion():
         data_q = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [[['location_id', 'child_of', ids_locs], ['quantity', '>', 0], ['company_id', '=', COMPANY_ID]]])], {'fields': ['product_id', 'quantity', 'location_id']})
         df = pd.DataFrame(data_q)
         if df.empty: return pd.DataFrame(), "Bodega vacía"
+        
+        # Extracción segura
         df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x,list) else x)
         df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x,list) else "-")
         df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x,list) else "-")
+        
+        # Eliminar columnas complejas
+        df = df.drop(columns=['product_id', 'location_id'], errors='ignore')
+        
         info = pd.DataFrame(models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [df['pid'].unique().tolist()], {'fields': ['standard_price', 'product_tmpl_id', 'detailed_type']}))
         info['Costo'] = info['standard_price']
         info['tmpl_id'] = info['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
@@ -299,10 +324,22 @@ def cargar_pnl_historico():
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         ids = list(set(TODOS_LOS_IDS + models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])))
-        data = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [[['account_id', 'in', ids], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]])], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution']})
+        data = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [[['account_id', 'in', ids], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]])], {'fields': ['date', 'name', 'account_id', 'debit', 'credit', 'analytic_distribution']})
         df = pd.DataFrame(data)
         if not df.empty:
-            df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0])
+            # 1. Extracción segura
+            df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
+            df['Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "")
+            
+            def get_aid(d):
+                try: return int(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0])
+                except: return None
+            df['id_cuenta_analitica'] = df['analytic_distribution'].apply(get_aid)
+            
+            # 2. ELIMINAR COLUMNAS COMPLEJAS (ESTO SOLUCIONA EL ARROW INVALID)
+            df = df.drop(columns=['account_id', 'analytic_distribution'], errors='ignore')
+            
+            # 3. Cálculos
             df['Monto_Neto'] = df['credit'] - df['debit']
             def clasificar(id_acc):
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -314,10 +351,6 @@ def cargar_pnl_historico():
                 if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
                 return "Otros Gastos"
             df['Clasificacion'] = df['ID_Cuenta'].apply(clasificar)
-            def get_aid(d):
-                try: return int(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0])
-                except: return None
-            df['id_cuenta_analitica'] = df['analytic_distribution'].apply(get_aid)
         return df
     except: return pd.DataFrame()
 
@@ -388,6 +421,10 @@ def cargar_compras_pendientes_v7_json_scanner(ids_an, tc):
         df['Monto_Pendiente'] = df.apply(lambda r: (r['qty_pending']*r['price_unit']) * (tc if r['currency_id'] and r['currency_id'][1]=='USD' else 1), axis=1)
         df['Proveedor'] = df['partner_id'].apply(lambda x: x[1])
         df['OC'] = df['order_id'].apply(lambda x: x[1])
+        
+        # Drop columns
+        df = df.drop(columns=['order_id', 'partner_id', 'analytic_distribution', 'currency_id'], errors='ignore')
+        
         return df[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
     except: return pd.DataFrame()
 
@@ -402,7 +439,7 @@ def cargar_metas():
 
 # --- 5. INTERFAZ ---
 
-st.title("🚀 Alrotek Monitor v9.6 (FINAL)")
+st.title("🚀 Alrotek Monitor v9.7")
 
 with st.expander("⚙️ Configuración", expanded=True):
     col_conf1, col_conf2 = st.columns(2)
@@ -450,7 +487,6 @@ with tab_kpis:
         
         c1, c2, c3, c4 = st.columns(4)
         with c1: card_kpi("Venta Total", venta, "border-green", f"{delta:+.1f}% vs Anterior")
-        # --- AQUÍ ESTÁ EL CAMBIO VISUAL DE LA META ---
         with c2: card_kpi("Meta Anual", meta, "bg-dark-blue", formato="moneda")
         with c3: card_kpi("Cumplimiento", f"{(venta/meta*100) if meta>0 else 0:.1f}%", "border-blue", formato="raw")
         with c4: card_kpi("Ticket Prom.", (venta/df_anio['name'].nunique()) if df_anio['name'].nunique()>0 else 0, "border-purple")
@@ -458,7 +494,6 @@ with tab_kpis:
         st.divider()
         st.download_button("📥 Descargar", data=convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Provincia', 'Venta_Neta']]), file_name=f"Ventas_{anio_sel}.xlsx")
 
-        # 1. Gráfico Meta (ANCHO COMPLETO - SEPARADO)
         st.markdown(f"### 🎯 Cumplimiento de Meta ({anio_sel})")
         v_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
         v_meta = df_metas[df_metas['Anio'] == anio_sel].groupby('Mes_Num')['Meta'].sum().reset_index()
@@ -474,7 +509,6 @@ with tab_kpis:
 
         st.divider()
 
-        # 2. Gráfico Comparativo (ANCHO COMPLETO - SEPARADO)
         st.markdown(f"### 🗓️ Comparativo: {anio_sel} vs {anio_sel-1}")
         v_ant_g = df_ant.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
         
@@ -490,7 +524,6 @@ with tab_kpis:
 
         c_graf_mix, c_graf_top = st.columns(2)
         
-        # Gráfico 3: Mix por Plan
         with c_graf_mix:
             st.subheader("📊 Mix de Ventas por Plan")
             if not df_prod.empty:
@@ -506,9 +539,8 @@ with tab_kpis:
                 df_grp = df_l.groupby(['Mes_Num','Mes','Plan'])['Venta_Neta'].sum().reset_index().sort_values('Mes_Num')
                 st.plotly_chart(config_plotly(px.bar(df_grp, x='Mes', y='Venta_Neta', color='Plan', title="")), use_container_width=True)
 
-        # Gráfico 4: Top Vendedores
         with c_graf_top:
-            st.subheader("🏆 Top Vendedores (vs Año Anterior)")
+            st.subheader("🏆 Top Vendedores")
             r_act = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
             r_ant = df_ant.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
             r_fin = pd.merge(r_act, r_ant, on='Vendedor', how='left').fillna(0)
@@ -530,9 +562,7 @@ with tab_prod:
         c_p1, c_p2 = st.columns([1, 3])
         with c_p1: 
             anio_p = st.selectbox("Año", sorted(df_prod['date'].dt.year.unique(), reverse=True))
-            # 5. FIX: Filtro Tipo Producto
             tipo_prod = st.radio("Filtro Tipo:", ["Todos", "Almacenable", "Servicio"])
-            # 6. FIX: Filtro Métrica
             metrica = st.radio("Ordenar Top por:", ["Monto (₡)", "Cantidad (Unid)"])
             
         df_p = df_prod[df_prod['date'].dt.year == anio_p].merge(df_cat[['ID_Producto', 'Tipo']], on='ID_Producto', how='left')
