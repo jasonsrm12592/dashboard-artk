@@ -181,24 +181,107 @@ def cargar_detalle_productos():
 
 @st.cache_data(ttl=3600)
 def cargar_inventario_general():
+    """Inventario general (Pestaña Productos). V6.6: Filtra KITS."""
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        try: ids_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
-        except: ids_kits = []
+        try:
+            ids_bom_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
+            data_boms = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'read', [ids_bom_kits], {'fields': ['product_tmpl_id']})
+            ids_tmpl_kits = [b['product_tmpl_id'][0] for b in data_boms if b['product_tmpl_id']]
+        except: ids_tmpl_kits = []
+
         dominio = [['active', '=', True]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'create_date', 'default_code']})
+        registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'create_date', 'default_code', 'product_tmpl_id']})
         df = pd.DataFrame(registros)
+        
         if not df.empty:
             df['create_date'] = pd.to_datetime(df['create_date'])
             df['Valor_Inventario'] = df['qty_available'] * df['standard_price']
             df.rename(columns={'id': 'ID_Producto', 'name': 'Producto', 'qty_available': 'Stock', 'standard_price': 'Costo', 'default_code': 'Referencia'}, inplace=True)
+            
+            df['tmpl_id'] = df['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
+            if ids_tmpl_kits:
+                df = df[~df['tmpl_id'].isin(ids_tmpl_kits)]
+                
             tipo_map = {'product': 'Almacenable', 'service': 'Servicio', 'consu': 'Consumible'}
             df['Tipo'] = df['detailed_type'].map(tipo_map).fillna('Otro')
+            
         return df
     except Exception: return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def cargar_inventario_baja_rotacion():
+    """
+    V6.7: Inventario Baja Rotación.
+    - Filtro estricto: 'BP/Stock' (Evita proyectos).
+    - Usa 'child_of' implicito en la búsqueda de quants con las locations encontradas.
+    """
+    try:
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
+        try:
+            ids_bom_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
+            data_boms = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'read', [ids_bom_kits], {'fields': ['product_tmpl_id']})
+            ids_tmpl_kits = [b['product_tmpl_id'][0] for b in data_boms if b['product_tmpl_id']]
+        except: ids_tmpl_kits = []
+        
+        # FILTRO ESTRICTO BP/STOCK
+        dominio_loc = [
+            ['complete_name', 'ilike', 'BP/Stock'],
+            ['usage', '=', 'internal'],
+            ['company_id', '=', COMPANY_ID]
+        ]
+        ids_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
+        if not ids_locs: return pd.DataFrame(), "No se encontraron bodegas 'BP/Stock'"
+
+        # Buscar Quants
+        dominio_quant = [['location_id', 'in', ids_locs], ['quantity', '>', 0]]
+        campos_quant = ['product_id', 'quantity', 'location_id', 'in_date']
+        
+        ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
+        data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': campos_quant})
+        
+        df = pd.DataFrame(data_quants)
+        if df.empty: return pd.DataFrame(), "Bodega vacía"
+        
+        df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
+        df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desc.")
+        df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "-")
+        
+        df['in_date'] = pd.to_datetime(df['in_date'])
+        df['in_date'] = df['in_date'].fillna(pd.to_datetime('2020-01-01'))
+        df['Dias_En_Bodega'] = (pd.Timestamp.now() - df['in_date']).dt.days
+        
+        ids_prods = df['pid'].unique().tolist()
+        prod_details = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price', 'product_tmpl_id']})
+        df_prod_info = pd.DataFrame(prod_details)
+        
+        df_prod_info['Costo'] = df_prod_info['standard_price']
+        df_prod_info['tmpl_id'] = df_prod_info['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
+        
+        df = pd.merge(df, df_prod_info[['id', 'Costo', 'tmpl_id']], left_on='pid', right_on='id', how='left')
+        
+        if ids_tmpl_kits:
+            df = df[~df['tmpl_id'].isin(ids_tmpl_kits)]
+        
+        df['Valor'] = df['quantity'] * df['Costo']
+
+        df_agrupado = df.groupby(['Producto']).agg({
+            'quantity': 'sum',
+            'Valor': 'sum',
+            'Dias_En_Bodega': 'max'
+        }).reset_index()
+        
+        df_huesos = df_agrupado[df_agrupado['Dias_En_Bodega'] > 90].sort_values('Dias_En_Bodega', ascending=False)
+        
+        return df_huesos, f"Analizando {len(ids_locs)} ubicaciones (BP/Stock)"
+
+    except Exception as e: return pd.DataFrame(), f"Error: {e}"
 
 @st.cache_data(ttl=3600)
 def cargar_estructura_analitica():
@@ -223,15 +306,11 @@ def cargar_estructura_analitica():
 
 @st.cache_data(ttl=3600)
 def cargar_pnl_historico():
-    """
-    Descarga P&L HISTÓRICO (Sin límite de fecha) y todas las cuentas (incluso gastos 6%).
-    """
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         
-        # Traer IDs de cuentas de Gasto (6%)
         ids_gastos = models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])
         ids_totales = list(set(TODOS_LOS_IDS + ids_gastos))
         
@@ -241,7 +320,6 @@ def cargar_pnl_historico():
             ['parent_state', '=', 'posted'], 
             ['analytic_distribution', '!=', False]
         ]
-        
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
         df = pd.DataFrame(registros)
@@ -259,8 +337,7 @@ def cargar_pnl_historico():
                 if id_acc == ID_SUMINISTROS_PROY: return "Suministros"
                 if id_acc == ID_AJUSTES_INV: return "Ajustes Inv"
                 if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
-                return "Otros Gastos" # Cuentas 6%
-                
+                return "Otros Gastos"
             df['Clasificacion'] = df.apply(clasificar, axis=1)
             def get_analytic_id(dist):
                 if not dist: return None
@@ -274,34 +351,19 @@ def cargar_pnl_historico():
 
 @st.cache_data(ttl=900)
 def cargar_detalle_horas_mes(ids_cuentas_analiticas):
-    """
-    Carga horas filtrando SOLAMENTE el MES ACTUAL.
-    """
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
-        
-        # FECHAS MES ACTUAL
         hoy = datetime.now()
         inicio_mes = hoy.replace(day=1).strftime('%Y-%m-%d')
-        
-        dominio = [
-            ['account_id', 'in', ids_clean],
-            ['date', '>=', inicio_mes], 
-            ['date', '<=', hoy.strftime('%Y-%m-%d')], 
-            ['employee_id', '!=', False], 
-            ['x_studio_tipo_horas_1', '!=', False] 
-        ]
-        
+        dominio = [['account_id', 'in', ids_clean], ['date', '>=', inicio_mes], ['date', '<=', hoy.strftime('%Y-%m-%d')], ['employee_id', '!=', False], ['x_studio_tipo_horas_1', '!=', False]]
         campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name', 'employee_id']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
-        
         df = pd.DataFrame(registros)
         if not df.empty:
             def limpiar_tipo(val): return str(val) if val else "No Definido"
@@ -403,33 +465,23 @@ def cargar_compras_pendientes_v7_json_scanner(ids_cuentas_analiticas, tc_usd):
         return df_filtrado[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
     except Exception: return pd.DataFrame()
 
-# --- NUEVA FUNCIÓN V6.0: FACTURACIÓN ESTIMADA ---
 @st.cache_data(ttl=900)
-def cargar_facturacion_estimada(ids_projects, tc_usd):
+def cargar_facturacion_estimada_v2(ids_projects, tc_usd):
     try:
         if not ids_projects: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
         ids_clean = [int(x) for x in ids_projects if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
-        
-        # 1. Obtener NOMBRES de proyectos
         proyectos_data = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'read', [ids_clean], {'fields': ['name']})
         nombres_proyectos = [p['name'] for p in proyectos_data if p['name']]
         if not nombres_proyectos: return pd.DataFrame()
-        
-        # 2. Buscar por texto (fuzzy)
-        nombre_buscar = nombres_proyectos[0] # Tomamos el primero
+        nombre_buscar = nombres_proyectos[0] 
         dominio = [['x_studio_field_sFPxe', 'ilike', nombre_buscar], ['x_studio_facturado', '=', False]]
-        
-        # CAMPOS CORREGIDOS
         campos = ['x_name', 'x_Monto', 'x_Fecha'] 
-        
         ids = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'read', [ids], {'fields': campos})
-        
         df = pd.DataFrame(registros)
         if not df.empty:
             df['Monto_CRC'] = df['x_Monto'] * tc_usd
@@ -438,7 +490,6 @@ def cargar_facturacion_estimada(ids_projects, tc_usd):
         return pd.DataFrame()
     except Exception: return pd.DataFrame()
 
-# --- FUNCIÓN RESTAURADA ---
 def cargar_metas():
     if os.path.exists("metas.xlsx"):
         df = pd.read_excel("metas.xlsx")
@@ -449,7 +500,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v6.4")
+st.title("🚀 Monitor Comercial ALROTEK v6.7")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -460,7 +511,7 @@ tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.
     "📊 Visión General", 
     "📦 Productos", 
     "📈 Control Proyectos", 
-    "🧟 Inventario", 
+    "📦 Baja Rotación", 
     "💰 Cartera",
     "👥 Segmentación",
     "💼 Vendedores",
@@ -651,7 +702,7 @@ with tab_renta:
             
             ids_seleccionados = [id_c for id_c, nombre in mapa_nombres.items() if nombre in cuentas_sel_nombres]
             
-            # Buscar IDs de Proyectos (Bridge Analytic -> Project)
+            # Buscar IDs de Proyectos (Bridge Analytic -> Project) para usar en modelo facturas
             ids_projects = []
             try:
                 common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
@@ -698,8 +749,8 @@ with tab_renta:
             df_compras = cargar_compras_pendientes_v7_json_scanner(ids_seleccionados, tc_usd)
             total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
             
-            # Facturación Estimada
-            df_fact_estimada = cargar_facturacion_estimada(ids_projects, tc_usd)
+            # --- NUEVA CARGA: FACTURACIÓN ESTIMADA ---
+            df_fact_estimada = cargar_facturacion_estimada_v2(ids_projects, tc_usd)
             total_fact_pendiente = df_fact_estimada['Monto_CRC'].sum() if not df_fact_estimada.empty else 0
             
             txt_bodegas = "Sin ubicación asignada"
