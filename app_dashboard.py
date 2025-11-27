@@ -39,6 +39,7 @@ hide_st_style = """
             .bg-purple { background-color: #8e44ad; }  /* Inventario */
             .bg-red { background-color: #c0392b; }     /* Provisiones */
             .bg-teal { background-color: #16a085; }    /* Compras */
+            .bg-cyan { background-color: #1abc9c; }    /* Proyección Facturación */
             .bg-gray { background-color: #7f8c8d; }    /* Ajustes/Otros */
             .bg-light-orange { background-color: #f39c12; } /* Suministros */
             </style>
@@ -221,12 +222,21 @@ def cargar_estructura_analitica():
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
-def cargar_pnl_contable(anio):
+def cargar_pnl_historico():
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        dominio_pnl = [['date', '>=', f'{anio}-01-01'], ['date', '<=', f'{anio}-12-31'], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]
+        
+        ids_gastos = models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])
+        ids_totales = list(set(TODOS_LOS_IDS + ids_gastos))
+        
+        dominio_pnl = [
+            ['account_id', 'in', ids_totales],
+            ['company_id', '=', COMPANY_ID], 
+            ['parent_state', '=', 'posted'], 
+            ['analytic_distribution', '!=', False]
+        ]
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
         df = pd.DataFrame(registros)
@@ -234,6 +244,7 @@ def cargar_pnl_contable(anio):
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
             df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
             df['Monto_Neto'] = df['credit'] - df['debit']
+            
             def clasificar(row):
                 id_acc = row['ID_Cuenta']
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -243,7 +254,7 @@ def cargar_pnl_contable(anio):
                 if id_acc == ID_SUMINISTROS_PROY: return "Suministros"
                 if id_acc == ID_AJUSTES_INV: return "Ajustes Inv"
                 if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
-                return "Sin Clasificar"
+                return "Otros Gastos"
             df['Clasificacion'] = df.apply(clasificar, axis=1)
             def get_analytic_id(dist):
                 if not dist: return None
@@ -256,17 +267,31 @@ def cargar_pnl_contable(anio):
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=900)
-def cargar_detalle_horas_estructura(ids_cuentas_analiticas):
+def cargar_detalle_horas_mes(ids_cuentas_analiticas):
+    """
+    Carga horas filtrando SOLAMENTE el MES ACTUAL.
+    """
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
         ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not ids_clean: return pd.DataFrame()
         
-        # FILTRO PARTNER = FALSE + STUDIO != FALSE
-        dominio = [['account_id', 'in', ids_clean], ['date', '>=', f'{datetime.now().year}-01-01'], ['employee_id', '!=', False], ['x_studio_tipo_horas_1', '!=', False], ['partner_id', '=', False]]
+        # FECHAS MES ACTUAL
+        hoy = datetime.now()
+        inicio_mes = hoy.replace(day=1).strftime('%Y-%m-%d')
+        
+        dominio = [
+            ['account_id', 'in', ids_clean],
+            ['date', '>=', inicio_mes], 
+            ['date', '<=', hoy.strftime('%Y-%m-%d')], 
+            ['employee_id', '!=', False], 
+            ['x_studio_tipo_horas_1', '!=', False] 
+        ]
+        
         campos = ['date', 'account_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'name', 'employee_id']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': campos})
@@ -295,7 +320,6 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
         ids_analytic_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         ids_projects = []
         if ids_analytic_clean:
@@ -334,30 +358,19 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuen
 
 @st.cache_data(ttl=900)
 def cargar_compras_pendientes_v7_json_scanner(ids_cuentas_analiticas, tc_usd):
-    """
-    VERSION 5.3: SCANNER JSON + MULTIMONEDA (Sin usar campos fantasma)
-    """
     try:
         if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
         targets = [str(int(x)) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
         if not targets: return pd.DataFrame()
-        
-        # Descarga Todo (Filtro amplio)
         dominio = [['state', 'in', ['purchase', 'done']], ['company_id', '=', COMPANY_ID], ['date_order', '>=', '2023-01-01']]
         ids = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'search', [dominio])
-        
-        # Campos necesarios (incluyendo currency)
         campos = ['order_id', 'partner_id', 'name', 'product_qty', 'qty_invoiced', 'price_unit', 'analytic_distribution', 'currency_id']
         registros = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'read', [ids], {'fields': campos})
-        
         df = pd.DataFrame(registros)
         if df.empty: return pd.DataFrame()
-        
-        # Scanner Python
         def es_mi_proyecto(dist):
             if not dist: return False
             try:
@@ -367,44 +380,76 @@ def cargar_compras_pendientes_v7_json_scanner(ids_cuentas_analiticas, tc_usd):
                     if t in keys: return True
                 return False
             except: return False
-            
         df['Es_Mio'] = df['analytic_distribution'].apply(es_mi_proyecto)
         df_filtrado = df[df['Es_Mio']].copy()
-        
         if df_filtrado.empty: return pd.DataFrame()
-        
-        # Pendiente
         df_filtrado['qty_pending'] = df_filtrado['product_qty'] - df_filtrado['qty_invoiced']
         df_filtrado = df_filtrado[df_filtrado['qty_pending'] > 0]
-        
         if df_filtrado.empty: return pd.DataFrame()
-        
-        # Conversion Moneda
         def get_monto_local(row):
             monto_original = row['qty_pending'] * row['price_unit']
             moneda = row['currency_id'][1] if row['currency_id'] else "CRC"
             if moneda == 'USD': return monto_original * tc_usd
             return monto_original
-
         df_filtrado['Monto_Pendiente'] = df_filtrado.apply(get_monto_local, axis=1)
         df_filtrado['Proveedor'] = df_filtrado['partner_id'].apply(lambda x: x[1] if x else "-")
         df_filtrado['OC'] = df_filtrado['order_id'].apply(lambda x: x[1] if x else "-")
-        
         return df_filtrado[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
+    except Exception: return pd.DataFrame()
+
+@st.cache_data(ttl=900)
+def cargar_facturacion_estimada_v2(ids_projects, tc_usd):
+    """
+    VERSION 6.3 (ROBUSTA): Filtra proyectos en PYTHON, no en SQL.
+    Trae todas las facturas pendientes y busca el nombre del proyecto en el campo de enlace.
+    """
+    try:
+        if not ids_projects: return pd.DataFrame()
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
+        # 1. Obtener nombres de proyectos a buscar
+        ids_clean = [int(x) for x in ids_projects if pd.notna(x) and x != 0]
+        if not ids_clean: return pd.DataFrame()
+        
+        proyectos_data = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'read', [ids_clean], {'fields': ['name']})
+        nombres_proyectos = [p['name'] for p in proyectos_data if p['name']]
+        if not nombres_proyectos: return pd.DataFrame()
+        
+        # 2. Descargar TODO lo pendiente (Fuerza Bruta)
+        dominio = [['x_studio_facturado', '=', False]]
+        campos = ['x_name', 'x_Monto', 'x_Fecha', 'x_studio_field_sFPxe']
+        
+        ids = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'search', [dominio])
+        registros = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'read', [ids], {'fields': campos})
+        
+        df = pd.DataFrame(registros)
+        if df.empty: return pd.DataFrame()
+        
+        # 3. Filtrar en Python (Fuzzy Match)
+        def es_mi_proyecto(valor_campo):
+            # El campo puede ser String "Proyecto X" o Lista [ID, "Proyecto X"]
+            txt = str(valor_campo)
+            for nombre_real in nombres_proyectos:
+                # Buscamos si el nombre del proyecto seleccionado está contenido en el campo
+                if nombre_real in txt: return True
+            return False
+            
+        df['Es_Mio'] = df['x_studio_field_sFPxe'].apply(es_mi_proyecto)
+        df_final = df[df['Es_Mio']].copy()
+        
+        if not df_final.empty:
+            df_final['Monto_CRC'] = df_final['x_Monto'] * tc_usd
+            df_final['Hito'] = df_final['x_name'] if 'x_name' in df_final.columns else "Hito"
+            return df_final
+            
+        return pd.DataFrame()
 
     except Exception: return pd.DataFrame()
 
-def cargar_metas():
-    if os.path.exists("metas.xlsx"):
-        df = pd.read_excel("metas.xlsx")
-        df['Mes'] = pd.to_datetime(df['Mes'])
-        df['Mes_Num'] = df['Mes'].dt.month
-        df['Anio'] = df['Mes'].dt.year
-        return df
-    return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
-
 # --- 5. INTERFAZ ---
-st.title("🚀 Monitor Comercial ALROTEK v5.3")
+st.title("🚀 Monitor Comercial ALROTEK v6.3")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -582,10 +627,9 @@ with tab_prod:
 
 # === PESTAÑA 3: RENTABILIDAD (CONTROL PROJECT) ===
 with tab_renta:
-    anio_r_sel = st.selectbox("Año Financiero", anios, key="renta_anio")
     
-    with st.spinner('Analizando P&L...'):
-        df_pnl = cargar_pnl_contable(anio_r_sel)
+    with st.spinner('Analizando Histórico P&L...'):
+        df_pnl = cargar_pnl_historico()
     
     if not df_analitica.empty:
         mapa_cuentas = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Plan_Nombre']))
@@ -593,15 +637,7 @@ with tab_renta:
         
         lista_planes = sorted(list(set(mapa_cuentas.values())))
         
-        # --- DIAGNÓSTICO ---
-        with st.expander("🕵️ Diagnóstico de Cuentas de Ingreso (Ver IDs reales)"):
-            if not df_pnl.empty:
-                df_diag = df_pnl[df_pnl['credit'] > 0][['ID_Cuenta', 'Nombre_Cuenta']].drop_duplicates().sort_values('ID_Cuenta')
-                st.dataframe(df_diag, hide_index=True, use_container_width=True)
-            else:
-                st.warning("No hay movimientos contables.")
-
-        st.subheader("Buscador de Proyectos")
+        st.subheader("🕵️ Buscador de Proyectos (Histórico)")
         c_filt1, c_filt2 = st.columns(2)
         with c_filt1:
             planes_sel = st.multiselect("1. Selecciona Planes:", lista_planes, default=[])
@@ -615,6 +651,16 @@ with tab_renta:
             
             ids_seleccionados = [id_c for id_c, nombre in mapa_nombres.items() if nombre in cuentas_sel_nombres]
             
+            # Buscar IDs de Proyectos (Bridge Analytic -> Project) para usar en modelo facturas
+            ids_projects = []
+            try:
+                common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+                uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+                models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+                ids_found = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', ids_seleccionados]]])
+                ids_projects = ids_found
+            except: pass
+
             df_filtered = pd.DataFrame()
             if not df_pnl.empty:
                 df_filtered = df_pnl[df_pnl['id_cuenta_analitica'].isin(ids_seleccionados)].copy()
@@ -638,23 +684,23 @@ with tab_renta:
                 total_ajustes = df_filtered[df_filtered['Clasificacion'] == 'Ajustes Inv']['Monto_Neto'].sum()
                 total_costo_retail = abs(df_filtered[df_filtered['Clasificacion'] == 'Costo Retail']['Monto_Neto'].sum())
                 
-            # FILTRO DE "OTROS" (Solo gastos 0.6)
-            if not df_filtered.empty:
-                df_otros_filtrado = df_filtered[
-                    (df_filtered['Clasificacion'] == 'Sin Clasificar') & 
-                    (df_filtered['Nombre_Cuenta'].astype(str).str.startswith('0.6', na=False))
-                ]
+                # Otros (Gastos 6%)
+                df_otros_filtrado = df_filtered[df_filtered['Clasificacion'] == 'Otros Gastos']
                 total_otros = abs(df_otros_filtrado['Monto_Neto'].sum())
 
-            df_horas_detalle = cargar_detalle_horas_estructura(ids_seleccionados)
+            # Horas (Mes Actual)
+            df_horas_detalle = cargar_detalle_horas_mes(ids_seleccionados)
             total_horas_ajustado = df_horas_detalle['Costo'].sum() if not df_horas_detalle.empty else 0
             
             df_stock_sitio, status_stock, bodegas_encontradas = cargar_inventario_ubicacion_proyecto_v4(ids_seleccionados, cuentas_sel_nombres)
             total_stock_sitio = df_stock_sitio['Valor_Total'].sum() if not df_stock_sitio.empty else 0
             
-            # Compras (V7 - JSON SCANNER + USD)
             df_compras = cargar_compras_pendientes_v7_json_scanner(ids_seleccionados, tc_usd)
             total_compras_pendientes = df_compras['Monto_Pendiente'].sum() if not df_compras.empty else 0
+            
+            # --- NUEVA CARGA: FACTURACIÓN ESTIMADA ---
+            df_fact_estimada = cargar_facturacion_estimada_v2(ids_projects, tc_usd)
+            total_fact_pendiente = df_fact_estimada['Monto_CRC'].sum() if not df_fact_estimada.empty else 0
             
             txt_bodegas = "Sin ubicación asignada"
             color_bg = "bg-purple"
@@ -665,44 +711,40 @@ with tab_renta:
             elif status_stock == "NO_BODEGA":
                 color_bg = "bg-gray"
             
-            # --- FILA 1 (4 Cols) ---
+            # --- FILA 1 ---
             k1, k2, k3, k4 = st.columns(4)
-            with k1: card_kpi("Ventas", total_ventas, "bg-green")
-            with k2: card_kpi("Instalación", total_instalacion, "bg-blue")
-            with k3: card_kpi("Suministros", total_suministros, "bg-light-orange")
+            with k1: card_kpi("Ventas (Acum)", total_ventas, "bg-green")
+            with k2: card_kpi("Instalación (Acum)", total_instalacion, "bg-blue")
+            with k3: card_kpi("Suministros (Acum)", total_suministros, "bg-light-orange")
             with k4: card_kpi("WIP Acumulado", total_wip, "bg-yellow")
             
-            # --- FILA 2 (4 Cols) ---
+            # --- FILA 2 ---
             k5, k6, k7, k8 = st.columns(4)
-            with k5: card_kpi("Provisiones", total_provision, "bg-red")
+            with k5: card_kpi("Provisiones (Acum)", total_provision, "bg-red")
             with k6: card_kpi("Ajustes Inv.", total_ajustes, "bg-gray")
-            with k7: card_kpi("Costo Retail (Mercadería)", total_costo_retail, "bg-orange") 
-            with k8: card_kpi("Otros (Gastos 0.6)", total_otros, "bg-gray", nota="Solo gastos (0.6)")
+            with k7: card_kpi("Costo Retail", total_costo_retail, "bg-orange") 
+            with k8: card_kpi("Otros (Gastos 6%)", total_otros, "bg-gray")
             
-            # --- FILA 3 (3 Cols) ---
-            k9, k10, k11 = st.columns(3)
+            # --- FILA 3 (KPIs Operativos) ---
+            k9, k10, k11, k12 = st.columns(4)
             with k9: card_kpi("Inventario Sitio", total_stock_sitio, color_bg, nota=txt_bodegas)
             with k10: card_kpi("Compras Pendientes", total_compras_pendientes, "bg-teal")
-            with k11: card_kpi("Costo Horas (Ajustado)", total_horas_ajustado, "bg-blue")
+            with k11: card_kpi("Costo Horas (Mes Actual)", total_horas_ajustado, "bg-blue")
+            with k12: card_kpi("Fact. Pendiente Estimada", total_fact_pendiente, "bg-cyan", nota="Proyección futura")
             
             st.divider()
             
             c_horas, c_stock = st.columns(2)
             with c_horas:
-                st.markdown("##### 🕒 Desglose de Horas (Shadow Cost)")
+                st.markdown("##### 🕒 Desglose de Horas (Mes Actual)")
                 if not df_horas_detalle.empty:
                     resumen_horas = df_horas_detalle.groupby(['Tipo_Hora', 'Multiplicador'])[['Horas', 'Costo']].sum().reset_index()
                     st.dataframe(resumen_horas, column_config={"Costo": st.column_config.NumberColumn(format="₡ %.2f"), "Multiplicador": st.column_config.NumberColumn(format="x %.1f")}, hide_index=True, use_container_width=True)
-                    
-                    with st.expander("🕵️ Auditoría Detallada de Horas"):
-                        df_audit = df_horas_detalle[['date', 'Empleado', 'name', 'Tipo_Hora', 'Horas', 'Costo']].sort_values('date', ascending=False)
-                        st.dataframe(df_audit, use_container_width=True)
-                        st.download_button("📥 Descargar", data=convert_df_to_excel(df_audit), file_name="Auditoria_Horas.xlsx")
-                else: st.caption("Sin registros.")
+                else: st.caption("Sin registros este mes.")
             
             with c_stock:
                 st.markdown("##### 📦 Detalle Inventario / Compras")
-                tab_inv_det, tab_com_det = st.tabs(["Inventario Físico", "Compras Pendientes"])
+                tab_inv_det, tab_com_det, tab_fact_det = st.tabs(["Inventario Físico", "Compras Pendientes", "Fact. Pendiente"])
                 with tab_inv_det:
                     if not df_stock_sitio.empty:
                         st.dataframe(df_stock_sitio[['pname', 'quantity', 'Valor_Total']], column_config={"pname": "Producto", "Valor_Total": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
@@ -711,18 +753,20 @@ with tab_renta:
                     if not df_compras.empty:
                         st.dataframe(df_compras, column_config={"Monto_Pendiente": st.column_config.NumberColumn(format="₡ %.2f")}, hide_index=True, use_container_width=True)
                     else: st.caption("Todo facturado.")
+                with tab_fact_det:
+                    if not df_fact_estimada.empty:
+                        st.dataframe(df_fact_estimada[['Hito', 'x_Monto', 'Monto_CRC', 'x_Fecha']], 
+                                     column_config={
+                                         "x_Monto": st.column_config.NumberColumn("Monto USD", format="$ %.2f"),
+                                         "Monto_CRC": st.column_config.NumberColumn("Monto CRC", format="₡ %.2f"),
+                                         "x_Fecha": st.column_config.DateColumn("Fecha Est.", format="DD/MM/YYYY")
+                                     }, hide_index=True, use_container_width=True)
+                    else: st.caption("No hay hitos pendientes.")
             
             st.divider()
-            st.markdown("**Detalle Movimientos Contables (P&L)**")
-            
-            # MOSTRAR TABLA DE OTROS FILTRADA PARA DIAGNÓSTICO
+            st.markdown("**Detalle Movimientos Contables (Acumulado)**")
             if not df_filtered.empty:
                 st.dataframe(df_filtered[['date', 'name', 'Nombre_Cuenta', 'Clasificacion', 'Monto_Neto']].sort_values(['Clasificacion', 'date'], ascending=True), column_config={"Monto_Neto": st.column_config.NumberColumn(format="₡ %.2f"), "date": st.column_config.DateColumn(format="DD/MM/YYYY")}, use_container_width=True, hide_index=True)
-            
-            # --- DIAGNÓSTICO ---
-            with st.expander("🕵️ Diagnóstico de Cuentas"):
-                 if not df_pnl.empty:
-                     st.dataframe(df_pnl[['ID_Cuenta', 'Nombre_Cuenta']].drop_duplicates().sort_values('ID_Cuenta'), hide_index=True, use_container_width=True)
 
 # === PESTAÑA 4: INVENTARIO ===
 with tab_inv:
