@@ -10,12 +10,12 @@ import ast
 
 # --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
 st.set_page_config(
-    page_title="Alrotek Monitor v9.2", 
+    page_title="Alrotek Monitor v9.3", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Estilos CSS Profesionales
+# Estilos CSS
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;}
@@ -59,7 +59,8 @@ st.markdown("""
         font-size: 0.7rem;
         color: #95a5a6;
     }
-
+    
+    /* Colores bordes */
     .border-green { border-left: 4px solid #27ae60; }
     .border-orange { border-left: 4px solid #d35400; }
     .border-yellow { border-left: 4px solid #f1c40f; }
@@ -90,11 +91,10 @@ try:
     
     TODOS_LOS_IDS = IDS_INGRESOS + [ID_WIP, ID_PROVISION_PROY, ID_COSTO_INSTALACION, ID_SUMINISTROS_PROY, ID_AJUSTES_INV, ID_COSTO_RETAIL]
 except Exception:
-    st.error("❌ Error Crítico: Credenciales no encontradas.")
+    st.error("❌ Error: Credenciales no encontradas en .streamlit/secrets.toml")
     st.stop()
 
 # --- 3. FUNCIONES UTILITARIAS ---
-
 def convert_df_to_excel(df, sheet_name='Datos'):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -102,18 +102,11 @@ def convert_df_to_excel(df, sheet_name='Datos'):
     return output.getvalue()
 
 def card_kpi(titulo, valor, color_class, nota="", formato="moneda"):
-    """
-    formato: 'moneda' (₡), 'numero' (simple), 'raw' (tal cual viene)
-    """
     if isinstance(valor, (int, float)):
-        if formato == "moneda":
-            val_fmt = f"₡ {valor:,.0f}"
-        elif formato == "numero":
-            val_fmt = f"{valor:,.0f}"
-        else:
-            val_fmt = str(valor)
-    else:
-        val_fmt = valor
+        if formato == "moneda": val_fmt = f"₡ {valor:,.0f}"
+        elif formato == "numero": val_fmt = f"{valor:,.0f}"
+        else: val_fmt = str(valor)
+    else: val_fmt = valor
         
     st.markdown(f"""
     <div class="kpi-card {color_class}">
@@ -133,8 +126,7 @@ def config_plotly(fig):
     )
     return fig
 
-# --- 4. FUNCIONES DE CARGA (CACHÉ) ---
-
+# --- 4. CARGA DE DATOS ---
 @st.cache_data(ttl=900) 
 def cargar_datos_generales():
     try:
@@ -192,10 +184,7 @@ def cargar_datos_clientes_extendido(ids_clientes):
         df = pd.DataFrame(registros)
         if not df.empty:
             df['Provincia'] = df['state_id'].apply(lambda x: x[1] if x else "Sin Provincia")
-            def procesar_campo_studio(valor):
-                if isinstance(valor, list): return valor[1]
-                if valor: return str(valor)
-                return "No Definido"
+            def procesar_campo_studio(valor): return str(valor[1]) if isinstance(valor, list) else (str(valor) if valor else "No Definido")
             df['Zona_Comercial'] = df['x_studio_zona'].apply(procesar_campo_studio) if 'x_studio_zona' in df.columns else "N/A"
             df['Categoria_Cliente'] = df['x_studio_categoria_cliente'].apply(procesar_campo_studio) if 'x_studio_categoria_cliente' in df.columns else "N/A"
             df.rename(columns={'id': 'ID_Cliente'}, inplace=True)
@@ -247,52 +236,35 @@ def cargar_inventario_baja_rotacion():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        try:
-            ids_bom_kits = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])
-            data_boms = models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'read', [ids_bom_kits], {'fields': ['product_tmpl_id']})
-            ids_tmpl_kits = [b['product_tmpl_id'][0] for b in data_boms if b['product_tmpl_id']]
+        try: ids_tmpl_kits = [b['product_tmpl_id'][0] for b in models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'read', [models.execute_kw(DB, uid, PASSWORD, 'mrp.bom', 'search', [[['type', '=', 'phantom']]])], {'fields': ['product_tmpl_id']}) if b['product_tmpl_id']]
         except: ids_tmpl_kits = []
-        dominio_loc = [['complete_name', 'ilike', 'BP/Stock'], ['usage', '=', 'internal'], ['company_id', '=', COMPANY_ID]]
-        ids_locs_raiz = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [dominio_loc])
-        if not ids_locs_raiz: return pd.DataFrame(), "❌ No se encontró 'BP/Stock'."
-        dominio_quant = [['location_id', 'child_of', ids_locs_raiz], ['quantity', '>', 0], ['company_id', '=', COMPANY_ID]]
-        ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [dominio_quant])
-        data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': ['product_id', 'quantity', 'location_id']})
-        df = pd.DataFrame(data_quants)
-        if df.empty: return pd.DataFrame(), "Bodega vacía."
-        df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
-        df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desc.")
-        df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "-")
-        ids_prods_stock = df['pid'].unique().tolist()
-        prod_details = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods_stock], {'fields': ['standard_price', 'product_tmpl_id', 'detailed_type']})
-        df_prod_info = pd.DataFrame(prod_details)
-        df_prod_info['Costo'] = df_prod_info['standard_price']
-        df_prod_info['tmpl_id'] = df_prod_info['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
-        df = pd.merge(df, df_prod_info[['id', 'Costo', 'tmpl_id', 'detailed_type']], left_on='pid', right_on='id', how='left')
+        ids_locs = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['complete_name', 'ilike', 'BP/Stock'], ['usage', '=', 'internal'], ['company_id', '=', COMPANY_ID]]])
+        if not ids_locs: return pd.DataFrame(), "❌ No BP/Stock"
+        data_q = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [[['location_id', 'child_of', ids_locs], ['quantity', '>', 0], ['company_id', '=', COMPANY_ID]]])], {'fields': ['product_id', 'quantity', 'location_id']})
+        df = pd.DataFrame(data_q)
+        if df.empty: return pd.DataFrame(), "Bodega vacía"
+        df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x,list) else x)
+        df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x,list) else "-")
+        df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x,list) else "-")
+        info = pd.DataFrame(models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [df['pid'].unique().tolist()], {'fields': ['standard_price', 'product_tmpl_id', 'detailed_type']}))
+        info['Costo'] = info['standard_price']
+        info['tmpl_id'] = info['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
+        df = pd.merge(df, info, left_on='pid', right_on='id', how='left')
         if ids_tmpl_kits: df = df[~df['tmpl_id'].isin(ids_tmpl_kits)]
         df = df[df['detailed_type'] == 'product']
         df['Valor'] = df['quantity'] * df['Costo']
-        if df.empty: return pd.DataFrame(), "Sin productos almacenables."
-        fecha_corte = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-        ids_prods_final = df['pid'].unique().tolist()
-        dominio_moves = [['product_id', 'in', ids_prods_final], ['state', '=', 'done'], ['date', '>=', fecha_corte], ['location_dest_id.usage', 'in', ['customer', 'production']]]
-        ids_moves = models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'search', [dominio_moves])
-        data_moves = models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'read', [ids_moves], {'fields': ['product_id', 'date']})
-        df_moves = pd.DataFrame(data_moves)
-        mapa_ult_salida = {}
-        if not df_moves.empty:
-            df_moves['pid'] = df_moves['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
-            df_moves['date'] = pd.to_datetime(df_moves['date'])
-            mapa_ult_salida = df_moves.groupby('pid')['date'].max().to_dict()
-        def calc_dias(row):
-            pid = row['pid']
-            if pid in mapa_ult_salida:
-                return (pd.Timestamp.now() - mapa_ult_salida[pid]).days
-            else: return 366 
-        df['Dias_Sin_Salida'] = df.apply(calc_dias, axis=1)
-        df_agrupado = df.groupby(['Producto']).agg({'quantity': 'sum', 'Valor': 'sum', 'Dias_Sin_Salida': 'min', 'Ubicacion': lambda x: ", ".join(sorted(set(str(v) for v in x if v)))}).reset_index()
-        return df_agrupado.sort_values('Dias_Sin_Salida', ascending=False), "OK"
-    except Exception as e: return pd.DataFrame(), f"Error: {e}"
+        if df.empty: return pd.DataFrame(), "Sin stock"
+        moves = models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'read', [models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'search', [[['product_id', 'in', df['pid'].unique().tolist()], ['state', '=', 'done'], ['date', '>=', (datetime.now()-timedelta(days=365)).strftime('%Y-%m-%d')], ['location_dest_id.usage', 'in', ['customer', 'production']]]])], {'fields': ['product_id', 'date']})
+        mapa = pd.DataFrame(moves)
+        mapa_dict = {}
+        if not mapa.empty:
+            mapa['pid'] = mapa['product_id'].apply(lambda x: x[0])
+            mapa['date'] = pd.to_datetime(mapa['date'])
+            mapa_dict = mapa.groupby('pid')['date'].max().to_dict()
+        df['Dias_Sin_Salida'] = df['pid'].apply(lambda x: (pd.Timestamp.now()-mapa_dict[x]).days if x in mapa_dict else 366)
+        res = df.groupby('Producto').agg({'quantity':'sum', 'Valor':'sum', 'Dias_Sin_Salida':'min', 'Ubicacion': lambda x: ", ".join(sorted(set(str(v) for v in x)))}).reset_index().sort_values('Dias_Sin_Salida', ascending=False)
+        return res, "OK"
+    except Exception as e: return pd.DataFrame(), f"Err: {e}"
 
 @st.cache_data(ttl=3600)
 def cargar_estructura_analitica():
@@ -300,18 +272,13 @@ def cargar_estructura_analitica():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        ids_plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'search', [[['id', '!=', 0]]])
-        plans = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'read', [ids_plans], {'fields': ['name']})
-        df_plans = pd.DataFrame(plans).rename(columns={'id': 'plan_id', 'name': 'Plan_Nombre'})
-        ids_acc = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'search', [[['active', 'in', [True, False]]]])
-        accounts = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'read', [ids_acc], {'fields': ['name', 'plan_id']})
-        df_acc = pd.DataFrame(accounts)
-        if not df_acc.empty and not df_plans.empty:
-            df_acc['plan_id'] = df_acc['plan_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else (x if x else 0))
-            df_full = pd.merge(df_acc, df_plans, on='plan_id', how='left')
-            df_full.rename(columns={'id': 'id_cuenta_analitica', 'name': 'Cuenta_Nombre'}, inplace=True)
-            df_full['Plan_Nombre'] = df_full['Plan_Nombre'].fillna("Sin Plan Asignado")
-            return df_full[['id_cuenta_analitica', 'Cuenta_Nombre', 'Plan_Nombre']]
+        plans = pd.DataFrame(models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'read', [models.execute_kw(DB, uid, PASSWORD, 'account.analytic.plan', 'search', [[['id', '!=', 0]]])], {'fields': ['name']})).rename(columns={'id': 'plan_id', 'name': 'Plan_Nombre'})
+        accs = pd.DataFrame(models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'read', [models.execute_kw(DB, uid, PASSWORD, 'account.analytic.account', 'search', [[['active', 'in', [True, False]]]])], {'fields': ['name', 'plan_id']}))
+        if not accs.empty:
+            accs['plan_id'] = accs['plan_id'].apply(lambda x: x[0] if isinstance(x,list) else (x if x else 0))
+            df = pd.merge(accs, plans, on='plan_id', how='left').rename(columns={'id': 'id_cuenta_analitica', 'name': 'Cuenta_Nombre'})
+            df['Plan_Nombre'] = df['Plan_Nombre'].fillna("Sin Plan")
+            return df[['id_cuenta_analitica', 'Cuenta_Nombre', 'Plan_Nombre']]
         return pd.DataFrame()
     except: return pd.DataFrame()
 
@@ -321,18 +288,13 @@ def cargar_pnl_historico():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        ids_gastos = models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])
-        ids_totales = list(set(TODOS_LOS_IDS + ids_gastos))
-        dominio_pnl = [['account_id', 'in', ids_totales], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]
-        ids = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [dominio_pnl])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [ids], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution', 'name']})
-        df = pd.DataFrame(registros)
+        ids = list(set(TODOS_LOS_IDS + models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])))
+        data = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [[['account_id', 'in', ids], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]])], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution']})
+        df = pd.DataFrame(data)
         if not df.empty:
-            df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
-            df['Nombre_Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "Desconocida")
+            df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0])
             df['Monto_Neto'] = df['credit'] - df['debit']
-            def clasificar(row):
-                id_acc = row['ID_Cuenta']
+            def clasificar(id_acc):
                 if id_acc in IDS_INGRESOS: return "Venta"
                 if id_acc == ID_WIP: return "WIP"
                 if id_acc == ID_PROVISION_PROY: return "Provisión"
@@ -341,130 +303,82 @@ def cargar_pnl_historico():
                 if id_acc == ID_AJUSTES_INV: return "Ajustes Inv"
                 if id_acc == ID_COSTO_RETAIL: return "Costo Retail"
                 return "Otros Gastos"
-            df['Clasificacion'] = df.apply(clasificar, axis=1)
-            def get_analytic_id(dist):
-                if not dist: return None
-                try: 
-                    if isinstance(dist, dict): return int(list(dist.keys())[0])
-                except: pass
-                return None
-            df['id_cuenta_analitica'] = df['analytic_distribution'].apply(get_analytic_id)
+            df['Clasificacion'] = df['ID_Cuenta'].apply(clasificar)
+            def get_aid(d):
+                try: return int(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0])
+                except: return None
+            df['id_cuenta_analitica'] = df['analytic_distribution'].apply(get_aid)
         return df
     except: return pd.DataFrame()
 
 @st.cache_data(ttl=900)
-def cargar_detalle_horas_mes(ids_cuentas_analiticas):
+def cargar_detalle_horas_mes(ids):
     try:
-        if not ids_cuentas_analiticas: return pd.DataFrame()
+        if not ids: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        ids_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
-        if not ids_clean: return pd.DataFrame()
         hoy = datetime.now()
-        inicio_mes = hoy.replace(day=1).strftime('%Y-%m-%d')
-        dominio = [['account_id', 'in', ids_clean], ['date', '>=', inicio_mes], ['date', '<=', hoy.strftime('%Y-%m-%d')], ['employee_id', '!=', False], ['x_studio_tipo_horas_1', '!=', False]]
-        ids = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids], {'fields': ['date', 'amount', 'unit_amount', 'x_studio_tipo_horas_1', 'employee_id']})
-        df = pd.DataFrame(registros)
+        ids_l = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [[['account_id', 'in', [int(x) for x in ids if x]], ['date', '>=', hoy.replace(day=1).strftime('%Y-%m-%d')], ['date', '<=', hoy.strftime('%Y-%m-%d')], ['x_studio_tipo_horas_1', '!=', False]]])
+        data = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids_l], {'fields': ['amount', 'unit_amount', 'x_studio_tipo_horas_1']})
+        df = pd.DataFrame(data)
         if not df.empty:
-            df['Tipo_Hora'] = df['x_studio_tipo_horas_1'].astype(str)
-            df['Multiplicador'] = df['Tipo_Hora'].apply(lambda x: 3.0 if "doble" in x.lower() else (1.5 if "extra" in x.lower() else 1.0))
+            df['Multiplicador'] = df['x_studio_tipo_horas_1'].astype(str).apply(lambda x: 3.0 if "doble" in x.lower() else (1.5 if "extra" in x.lower() else 1.0))
             df['Costo'] = df['amount'].abs() * df['Multiplicador']
             df['Horas'] = df['unit_amount']
+            df['Tipo_Hora'] = df['x_studio_tipo_horas_1']
         return df
     except: return pd.DataFrame()
 
 @st.cache_data(ttl=900)
-def cargar_inventario_ubicacion_proyecto_v4(ids_cuentas_analiticas, nombres_cuentas_analiticas):
+def cargar_inventario_ubicacion_proyecto_v4(ids_an, names_an):
     try:
-        if not ids_cuentas_analiticas: return pd.DataFrame(), "SIN_SELECCION", []
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        ids_analytic_clean = [int(x) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
-        ids_locs_final = []
-        if ids_analytic_clean:
-            try: ids_locs_final += models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', ids_analytic_clean]]])
+        ids_loc = []
+        if ids_an: 
+            try: ids_loc += models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', [int(x) for x in ids_an if x]]]])
             except: pass
-        if nombres_cuentas_analiticas:
-            for nombre in nombres_cuentas_analiticas:
-                if isinstance(nombre, str) and len(nombre) > 4:
-                    keyword = nombre.split(' ')[0] 
-                    if len(keyword) > 3:
-                        ids_locs_final += models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['name', 'ilike', keyword]]])
-        ids_locs_final = list(set(ids_locs_final))
-        if not ids_locs_final: return pd.DataFrame(), "NO_BODEGA", []
-        loc_names = [l['complete_name'] for l in models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_locs_final], {'fields': ['complete_name']})]
-        ids_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [[['location_id', 'child_of', ids_locs_final], ['company_id', '=', COMPANY_ID]]])
-        data_quants = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [ids_quants], {'fields': ['product_id', 'quantity']})
-        df = pd.DataFrame(data_quants)
-        if df.empty: return pd.DataFrame(), "NO_STOCK", loc_names
-        df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x, (list, tuple)) else x)
-        df['pname'] = df['product_id'].apply(lambda x: x[1] if isinstance(x, (list, tuple)) else "Desconocido")
-        df_grouped = df.groupby(['pid', 'pname']).agg({'quantity': 'sum'}).reset_index()
-        ids_prods = df_grouped['pid'].unique().tolist()
-        costos = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids_prods], {'fields': ['standard_price']})
-        df_costos = pd.DataFrame(costos).rename(columns={'id': 'pid', 'standard_price': 'Costo_Unit'})
-        df_final = pd.merge(df_grouped, df_costos, on='pid', how='left')
-        df_final['Valor_Total'] = df_final['quantity'] * df_final['Costo_Unit']
-        return df_final[df_final['quantity'] != 0], "OK", loc_names
-    except Exception as e: return pd.DataFrame(), f"ERR: {str(e)}", []
+        if names_an:
+            for n in names_an:
+                if len(n)>4: ids_loc += models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['name', 'ilike', n.split(' ')[0]]]])
+        ids_loc = list(set(ids_loc))
+        if not ids_loc: return pd.DataFrame(), "NO_BODEGA", []
+        names = [l['complete_name'] for l in models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_loc], {'fields': ['complete_name']})]
+        data = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [[['location_id', 'child_of', ids_loc], ['company_id', '=', COMPANY_ID]]])], {'fields': ['product_id', 'quantity']})
+        df = pd.DataFrame(data)
+        if df.empty: return pd.DataFrame(), "NO_STOCK", names
+        df['pid'] = df['product_id'].apply(lambda x: x[0])
+        df['pname'] = df['product_id'].apply(lambda x: x[1])
+        grp = df.groupby(['pid', 'pname'])['quantity'].sum().reset_index()
+        costos = pd.DataFrame(models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [grp['pid'].unique().tolist()], {'fields': ['standard_price']})).rename(columns={'id':'pid', 'standard_price':'Costo'})
+        fin = pd.merge(grp, costos, on='pid', how='left')
+        fin['Valor_Total'] = fin['quantity'] * fin['Costo']
+        return fin[fin['quantity']!=0], "OK", names
+    except Exception as e: return pd.DataFrame(), str(e), []
 
 @st.cache_data(ttl=900)
-def cargar_compras_pendientes_v7_json_scanner(ids_cuentas_analiticas, tc_usd):
+def cargar_compras_pendientes_v7_json_scanner(ids_an, tc):
     try:
-        if not ids_cuentas_analiticas: return pd.DataFrame()
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        targets = [str(int(x)) for x in ids_cuentas_analiticas if pd.notna(x) and x != 0]
-        dominio = [['state', 'in', ['purchase', 'done']], ['company_id', '=', COMPANY_ID], ['date_order', '>=', '2023-01-01']]
-        ids = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'read', [ids], {'fields': ['order_id', 'partner_id', 'name', 'product_qty', 'qty_invoiced', 'price_unit', 'analytic_distribution', 'currency_id']})
-        df = pd.DataFrame(registros)
+        targets = [str(int(x)) for x in ids_an if x]
+        data = models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'read', [models.execute_kw(DB, uid, PASSWORD, 'purchase.order.line', 'search', [[['state', 'in', ['purchase', 'done']], ['company_id', '=', COMPANY_ID], ['date_order', '>=', '2023-01-01']]])], {'fields': ['order_id', 'partner_id', 'name', 'product_qty', 'qty_invoiced', 'price_unit', 'analytic_distribution', 'currency_id']})
+        df = pd.DataFrame(data)
         if df.empty: return pd.DataFrame()
-        def es_mi_proyecto(dist):
-            if not dist: return False
-            try:
-                d = dist if isinstance(dist, dict) else ast.literal_eval(str(dist))
-                return any(t in [str(k) for k in d.keys()] for t in targets)
+        def es_mio(d):
+            try: return any(t in [str(k) for k in (d if isinstance(d,dict) else ast.literal_eval(str(d))).keys()] for t in targets)
             except: return False
-        df['Es_Mio'] = df['analytic_distribution'].apply(es_mi_proyecto)
-        df = df[df['Es_Mio']].copy()
+        df = df[df['analytic_distribution'].apply(es_mio)].copy()
         df['qty_pending'] = df['product_qty'] - df['qty_invoiced']
         df = df[df['qty_pending'] > 0]
         if df.empty: return pd.DataFrame()
-        def get_monto_local(row):
-            monto = row['qty_pending'] * row['price_unit']
-            moneda = row['currency_id'][1] if row['currency_id'] else "CRC"
-            return monto * tc_usd if moneda == 'USD' else monto
-        df['Monto_Pendiente'] = df.apply(get_monto_local, axis=1)
-        df['Proveedor'] = df['partner_id'].apply(lambda x: x[1] if x else "-")
-        df['OC'] = df['order_id'].apply(lambda x: x[1] if x else "-")
+        df['Monto_Pendiente'] = df.apply(lambda r: (r['qty_pending']*r['price_unit']) * (tc if r['currency_id'] and r['currency_id'][1]=='USD' else 1), axis=1)
+        df['Proveedor'] = df['partner_id'].apply(lambda x: x[1])
+        df['OC'] = df['order_id'].apply(lambda x: x[1])
         return df[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
-    except: return pd.DataFrame()
-
-@st.cache_data(ttl=900)
-def cargar_facturacion_estimada_v2(ids_projects, tc_usd):
-    try:
-        if not ids_projects: return pd.DataFrame()
-        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
-        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
-        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        ids_clean = [int(x) for x in ids_projects if pd.notna(x) and x != 0]
-        proyectos_data = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'read', [ids_clean], {'fields': ['name']})
-        if not proyectos_data: return pd.DataFrame()
-        nombre_buscar = proyectos_data[0]['name']
-        dominio = [['x_studio_field_sFPxe', 'ilike', nombre_buscar], ['x_studio_facturado', '=', False]]
-        ids = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'read', [ids], {'fields': ['x_name', 'x_Monto', 'x_Fecha']})
-        df = pd.DataFrame(registros)
-        if not df.empty:
-            df['Monto_CRC'] = df['x_Monto'] * tc_usd
-            df['Hito'] = df['x_name'] if 'x_name' in df.columns else "Hito"
-            return df
-        return pd.DataFrame()
     except: return pd.DataFrame()
 
 def cargar_metas():
@@ -480,12 +394,10 @@ def cargar_metas():
 
 st.title("🚀 Alrotek Monitor de Ventas")
 
-with st.expander("⚙️ Configuración y Filtros Globales", expanded=True):
+with st.expander("⚙️ Configuración", expanded=True):
     col_conf1, col_conf2 = st.columns(2)
-    with col_conf1:
-        tc_usd = st.number_input("Tipo de Cambio (USD -> CRC)", value=515, min_value=1, step=1)
-    with col_conf2:
-        st.info(f"💡 Sincronizado. TC: ₡{tc_usd}")
+    with col_conf1: tc_usd = st.number_input("TC (USD -> CRC)", value=515)
+    with col_conf2: st.info(f"TC: ₡{tc_usd}")
 
 tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
     "📊 Visión General", 
@@ -505,8 +417,7 @@ with st.spinner('Cargando...'):
     df_analitica = cargar_estructura_analitica()
     
     if not df_main.empty:
-        ids_unicos = df_main['ID_Cliente'].unique().tolist()
-        df_info = cargar_datos_clientes_extendido(ids_unicos)
+        df_info = cargar_datos_clientes_extendido(df_main['ID_Cliente'].unique().tolist())
         if not df_info.empty:
             df_main = pd.merge(df_main, df_info, on='ID_Cliente', how='left')
             df_main[['Provincia', 'Zona_Comercial', 'Categoria_Cliente']] = df_main[['Provincia', 'Zona_Comercial', 'Categoria_Cliente']].fillna('Sin Dato')
@@ -516,8 +427,9 @@ with st.spinner('Cargando...'):
 # === PESTAÑA 1: VISIÓN GENERAL ===
 with tab_kpis:
     if not df_main.empty:
-        col_filtro, _ = st.columns([1,3])
-        with col_filtro: anio_sel = st.selectbox("📅 Año Fiscal", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True))
+        col_f, _ = st.columns([1,3])
+        with col_f: anio_sel = st.selectbox("📅 Año Fiscal", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True))
+        
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
         df_ant = df_main[df_main['invoice_date'].dt.year == (anio_sel - 1)]
         
@@ -525,68 +437,95 @@ with tab_kpis:
         venta_ant = df_ant['Venta_Neta'].sum()
         delta = ((venta - venta_ant) / venta_ant * 100) if venta_ant > 0 else 0
         meta = df_metas[df_metas['Anio'] == anio_sel]['Meta'].sum()
-        ticket = (venta / df_anio['name'].nunique()) if df_anio['name'].nunique() > 0 else 0
         
         c1, c2, c3, c4 = st.columns(4)
         with c1: card_kpi("Venta Total", venta, "border-green", f"{delta:+.1f}% vs Anterior")
-        with c2: card_kpi("Meta Anual", meta, "border-cyan")
+        # 1. FIX: Meta Anual formato moneda
+        with c2: card_kpi("Meta Anual", meta, "border-cyan", formato="moneda")
         with c3: card_kpi("Cumplimiento", f"{(venta/meta*100) if meta>0 else 0:.1f}%", "border-blue", formato="raw")
-        with c4: card_kpi("Ticket Prom.", ticket, "border-purple")
+        with c4: card_kpi("Ticket Prom.", (venta/df_anio['name'].nunique()) if df_anio['name'].nunique()>0 else 0, "border-purple")
         
         st.divider()
-        col_down, _ = st.columns([1, 4])
-        with col_down:
-            st.download_button("📥 Descargar Detalle", data=convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Provincia', 'Venta_Neta']]), file_name=f"Ventas_{anio_sel}.xlsx")
+        st.download_button("📥 Descargar", data=convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Provincia', 'Venta_Neta']]), file_name=f"Ventas_{anio_sel}.xlsx")
 
-        c_graf, c_vend = st.columns([2, 1])
-        with c_graf:
-            st.subheader("📊 Ventas por Plan Analítico")
-            if not df_prod.empty:
-                df_lineas = df_prod[df_prod['date'].dt.year == anio_sel].copy()
-                mapa_planes = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre'])) if not df_analitica.empty else {}
-                def clasificar(dist):
-                    if not dist: return "Retail/Sin Analítica"
-                    try:
-                        d = dist if isinstance(dist, dict) else ast.literal_eval(str(dist))
-                        for k in d.keys():
-                            return mapa_planes.get(str(k), "Desconocido")
-                    except: pass
-                    return "Desconocido"
-                df_lineas['Plan'] = df_lineas['analytic_distribution'].apply(clasificar)
-                st.plotly_chart(config_plotly(px.pie(df_lineas.groupby('Plan')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Plan', hole=0.4)), use_container_width=True)
-
-            st.subheader("🎯 Comparativo vs Meta")
+        c_graf1, c_graf2 = st.columns(2)
+        
+        # 4. FIX: Gráfico Comparativo Mensual (Año Actual vs Anterior)
+        with c_graf1:
+            st.subheader("🗓️ Comparativo Mensual (Año vs Año)")
             v_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
+            v_ant_g = df_ant.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
             v_meta = df_metas[df_metas['Anio'] == anio_sel].groupby('Mes_Num')['Meta'].sum().reset_index()
-            df_chart = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
+            
+            df_chart = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_ant_g, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
             df_chart['Mes'] = df_chart['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
-            colores = ['#2ecc71' if r >= m else '#e74c3c' for r, m in zip(df_chart['Actual'], df_chart['Meta'])]
+            
             fig = go.Figure()
-            fig.add_trace(go.Bar(x=df_chart['Mes'], y=df_chart['Actual'], marker_color=colores, name='Real'))
-            fig.add_trace(go.Scatter(x=df_chart['Mes'], y=df_chart['Meta'], line=dict(color='#f1c40f', width=3, dash='dash'), name='Meta'))
+            fig.add_trace(go.Bar(x=df_chart['Mes'], y=df_chart['Actual'], name='Actual', marker_color='#2980b9'))
+            fig.add_trace(go.Bar(x=df_chart['Mes'], y=df_chart['Anterior'], name='Anterior', marker_color='#95a5a6'))
+            fig.add_trace(go.Scatter(x=df_chart['Mes'], y=df_chart['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
             st.plotly_chart(config_plotly(fig), use_container_width=True)
 
-        with c_vend:
-            st.subheader("🏆 Top Vendedores")
-            rank = df_anio.groupby('Vendedor')['Venta_Neta'].sum().sort_values().tail(10)
-            st.plotly_chart(config_plotly(px.bar(rank, orientation='h', text_auto='.2s')), use_container_width=True)
+        # 2. FIX: Gráfico por Plan Analítico Mensual
+        with c_graf2:
+            st.subheader("📊 Mix de Ventas por Plan")
+            if not df_prod.empty:
+                df_l = df_prod[df_prod['date'].dt.year == anio_sel].copy()
+                mapa = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre'])) if not df_analitica.empty else {}
+                def clasif(d):
+                    if not d: return "Retail"
+                    try: return mapa.get(str(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0]), "Otro")
+                    except: return "Otro"
+                df_l['Plan'] = df_l['analytic_distribution'].apply(clasif)
+                df_l['Mes'] = df_l['date'].dt.strftime('%m-%b')
+                df_l['Mes_Num'] = df_l['date'].dt.month
+                df_grp = df_l.groupby(['Mes_Num','Mes','Plan'])['Venta_Neta'].sum().reset_index().sort_values('Mes_Num')
+                st.plotly_chart(config_plotly(px.bar(df_grp, x='Mes', y='Venta_Neta', color='Plan', title="")), use_container_width=True)
+
+        # 3. FIX: Top Vendedores con Delta vs Año Anterior
+        st.subheader("🏆 Top Vendedores (vs Año Anterior)")
+        r_act = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
+        r_ant = df_ant.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
+        r_fin = pd.merge(r_act, r_ant, on='Vendedor', how='left').fillna(0)
+        r_fin = r_fin.sort_values('Actual', ascending=True).tail(10)
+        
+        def txt(row):
+            delta = ((row['Actual'] - row['Anterior']) / row['Anterior'] * 100) if row['Anterior']>0 else 100
+            icon = "⬆️" if delta >= 0 else "⬇️"
+            return f"₡{row['Actual']/1e6:.1f}M {icon} {delta:.0f}%"
+        
+        r_fin['Texto'] = r_fin.apply(txt, axis=1)
+        fig_v = go.Figure(go.Bar(x=r_fin['Actual'], y=r_fin['Vendedor'], orientation='h', text=r_fin['Texto'], textposition='auto', marker_color='#2ecc71'))
+        st.plotly_chart(config_plotly(fig_v), use_container_width=True)
 
 # === PESTAÑA 2: PRODUCTOS ===
 with tab_prod:
     df_cat = cargar_inventario_general()
     if not df_prod.empty:
-        col_filtro, _ = st.columns([1,3])
-        with col_filtro: anio_p = st.selectbox("Año Análisis", sorted(df_prod['date'].dt.year.unique(), reverse=True))
+        c_p1, c_p2 = st.columns([1, 3])
+        with c_p1: 
+            anio_p = st.selectbox("Año", sorted(df_prod['date'].dt.year.unique(), reverse=True))
+            # 5. FIX: Filtro Tipo Producto
+            tipo_prod = st.radio("Filtro Tipo:", ["Todos", "Almacenable", "Servicio"])
+            # 6. FIX: Filtro Métrica
+            metrica = st.radio("Ordenar Top por:", ["Monto (₡)", "Cantidad (Unid)"])
+            
         df_p = df_prod[df_prod['date'].dt.year == anio_p].merge(df_cat[['ID_Producto', 'Tipo']], on='ID_Producto', how='left')
         df_p['Tipo'] = df_p['Tipo'].fillna('Otro')
         
+        if tipo_prod != "Todos":
+            df_p = df_p[df_p['Tipo'] == tipo_prod]
+            
+        col_m1, col_m2 = st.columns([1, 2])
+        with col_m1: 
+            st.plotly_chart(config_plotly(px.pie(df_p.groupby('Tipo')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Tipo', hole=0.5, title="Mix Venta")), use_container_width=True)
+        with col_m2:
+            st.subheader("Top 10 Productos")
+            col_sort = 'Venta_Neta' if metrica == "Monto (₡)" else 'quantity'
+            df_top = df_p.groupby('Producto')[[col_sort]].sum().sort_values(col_sort, ascending=False).head(10).reset_index().sort_values(col_sort, ascending=True)
+            st.plotly_chart(config_plotly(px.bar(df_top, x=col_sort, y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
         st.download_button("📥 Descargar", data=convert_df_to_excel(df_p), file_name=f"Prod_{anio_p}.xlsx")
-        c1, c2 = st.columns([1, 2])
-        with c1: st.plotly_chart(config_plotly(px.pie(df_p.groupby('Tipo')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Tipo', hole=0.5)), use_container_width=True)
-        with c2:
-            st.subheader("Top Productos")
-            df_top = df_p.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
-            st.plotly_chart(config_plotly(px.bar(df_top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
 
 # === PESTAÑA 3: PROYECTOS ===
 with tab_renta:
@@ -603,14 +542,11 @@ with tab_renta:
         
         if proys:
             sel_ids = [id for id, n in mapa_n.items() if n in proys]
-            # Filtrar P&L
             df_f = df_pnl[df_pnl['id_cuenta_analitica'].isin(sel_ids)] if not df_pnl.empty else pd.DataFrame()
-            # Calcular
             totales = {k: abs(df_f[df_f['Clasificacion']==k]['Monto_Neto'].sum()) if not df_f.empty else 0 
                       for k in ['Venta','Instalación','Suministros','WIP','Provisión','Costo Retail','Otros Gastos']}
             totales['Ajustes Inv'] = df_f[df_f['Clasificacion']=='Ajustes Inv']['Monto_Neto'].sum() if not df_f.empty else 0
             
-            # Operativo
             df_h = cargar_detalle_horas_mes(sel_ids)
             df_s, _, bods = cargar_inventario_ubicacion_proyecto_v4(sel_ids, proys)
             df_c = cargar_compras_pendientes_v7_json_scanner(sel_ids, tc_usd)
@@ -737,10 +673,9 @@ with tab_vend:
                 df_lst = df_v_old[df_v_old['Cliente'].isin(perdidos_v)].groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                 st.plotly_chart(config_plotly(px.bar(df_lst, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
 
-# === PESTAÑA 8: RADIOGRAFÍA (CORREGIDO) ===
+# === PESTAÑA 8: RADIOGRAFÍA ===
 with tab_det:
     if not df_main.empty:
-        # CORRECCIÓN: index=None y placeholder para permitir búsqueda real
         cli = st.selectbox("Buscar Cliente:", sorted(df_main['Cliente'].unique()), index=None, placeholder="Escriba para buscar...")
         
         if cli:
