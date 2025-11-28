@@ -508,7 +508,7 @@ with tab_kpis:
         fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Actual'], name=f'{anio_sel}', marker_color='#2980b9'))
         fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Anterior'], name=f'{anio_sel-1}', marker_color='#95a5a6'))
         st.plotly_chart(config_plotly(fig_c), use_container_width=True)
-
+        
         st.divider()
         c_mix, c_top = st.columns(2)
         with c_mix:
@@ -516,8 +516,19 @@ with tab_kpis:
             if not df_prod.empty:
                 df_l = df_prod[df_prod['date'].dt.year == anio_sel].copy()
                 mapa = dict(zip(df_an['id_cuenta_analitica'].astype(str), df_an['Plan_Nombre'])) if not df_an.empty else {}
-                df_l['Plan'] = df_l['analytic_distribution'].apply(lambda d: mapa.get(str(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0]), "Otro") if d else "Retail")
-                st.plotly_chart(config_plotly(px.bar(df_l.groupby(['date','Plan'])['Venta_Neta'].sum().reset_index().assign(Mes=lambda x: x.date.dt.strftime('%m-%b')), x='Mes', y='Venta_Neta', color='Plan', title="")), use_container_width=True)
+                def clasif(d):
+                    if not d: return "Retail"
+                    try: return mapa.get(str(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0]), "Otro")
+                    except: return "Otro"
+                df_l['Plan'] = df_l['analytic_distribution'].apply(clasif)
+                
+                # --- CORRECCION AQUI: Agrupar por Mes Numérico y Nombre para ordenar bien ---
+                df_l['Mes_Num'] = df_l['date'].dt.month
+                df_l['Mes_Nom'] = df_l['date'].dt.strftime('%m-%b')
+                
+                df_grp = df_l.groupby(['Mes_Num', 'Mes_Nom', 'Plan'])['Venta_Neta'].sum().reset_index().sort_values('Mes_Num')
+                st.plotly_chart(config_plotly(px.bar(df_grp, x='Mes_Nom', y='Venta_Neta', color='Plan', title="")), use_container_width=True)
+       
         with c_top:
             st.subheader("🏆 Top Vendedores")
             r_act = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index()
@@ -747,3 +758,4 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
