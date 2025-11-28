@@ -10,7 +10,7 @@ import ast
 
 # --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
 st.set_page_config(
-    page_title="Alrotek Monitor v9.8", 
+    page_title="Alrotek Monitor v10.1", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -60,6 +60,7 @@ st.markdown("""
         color: #95a5a6;
     }
     
+    /* Colores Semánticos */
     .border-green { border-left: 4px solid #27ae60; }
     .border-orange { border-left: 4px solid #d35400; }
     .border-yellow { border-left: 4px solid #f1c40f; }
@@ -69,7 +70,11 @@ st.markdown("""
     .border-teal { border-left: 4px solid #16a085; }
     .border-cyan { border-left: 4px solid #1abc9c; }
     .border-gray { border-left: 4px solid #7f8c8d; }
-    .bg-dark-blue { background-color: #f0f8ff; border-left: 5px solid #000080; }
+    
+    /* Alertas de Margen */
+    .bg-alert-green { background-color: #e8f8f5; border-left: 5px solid #2ecc71; }
+    .bg-alert-warn { background-color: #fef9e7; border-left: 5px solid #f1c40f; }
+    .bg-alert-red { background-color: #fdedec; border-left: 5px solid #e74c3c; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -112,6 +117,7 @@ def card_kpi(titulo, valor, color_class, nota="", formato="moneda"):
     if es_numero:
         if formato == "moneda": val_fmt = f"₡ {val_float:,.0f}"
         elif formato == "numero": val_fmt = f"{val_float:,.0f}"
+        elif formato == "percent": val_fmt = f"{val_float:.1f}%"
         else: val_fmt = str(valor)
     else:
         val_fmt = str(valor)
@@ -231,7 +237,6 @@ def cargar_inventario_general():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        # FIX: Traer activos y archivados para evitar "Otros"
         dominio = ['|', ['active', '=', True], ['active', '=', False]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'default_code']})
@@ -398,7 +403,6 @@ def cargar_compras_pendientes_v7_json_scanner(ids_an, tc):
         return df[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
     except: return pd.DataFrame()
 
-# --- NUEVA FUNCIÓN: FACTURACIÓN ESTIMADA MEJORADA (Auto-búsqueda de proyecto) ---
 @st.cache_data(ttl=900)
 def cargar_facturacion_estimada_v2(ids_analiticas, tc_usd):
     try:
@@ -406,40 +410,25 @@ def cargar_facturacion_estimada_v2(ids_analiticas, tc_usd):
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        
-        # 1. Buscar proyectos asociados a las analíticas
         ids_clean_an = [int(x) for x in ids_analiticas if pd.notna(x) and x != 0]
         ids_proys = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', ids_clean_an]]])
-        
         if not ids_proys: return pd.DataFrame()
-        
-        # 2. Obtener nombres de proyectos para buscar en facturas
         proyectos_data = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'read', [ids_proys], {'fields': ['name']})
         if not proyectos_data: return pd.DataFrame()
-        
         nombres_buscar = [p['name'] for p in proyectos_data if p['name']]
         if not nombres_buscar: return pd.DataFrame()
-        
-        # 3. Buscar facturas estimadas (Modelo x_facturas.proyectos)
-        # Usamos 'ilike' con el primer nombre encontrado (limitación de búsqueda simple) o iteramos
-        # Para hacerlo robusto, buscamos por el primer proyecto encontrado (ajustable)
         nombre_buscar = nombres_buscar[0] 
-        
         dominio = [['x_studio_field_sFPxe', 'ilike', nombre_buscar], ['x_studio_facturado', '=', False]]
         ids_fact = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'search', [dominio])
-        
         if not ids_fact: return pd.DataFrame()
-        
         registros = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'read', [ids_fact], {'fields': ['x_name', 'x_Monto', 'x_Fecha']})
         df = pd.DataFrame(registros)
-        
         if not df.empty:
             df['Monto_CRC'] = df['x_Monto'] * tc_usd
             df['Hito'] = df['x_name'] if 'x_name' in df.columns else "Hito"
             return df
         return pd.DataFrame()
-    except Exception as e:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
 def cargar_metas():
     if os.path.exists("metas.xlsx"):
@@ -452,7 +441,7 @@ def cargar_metas():
 
 # --- 5. INTERFAZ ---
 
-st.title("🚀 Alrotek Monitor v9.8 (Final Corregida)")
+st.title("🚀 Alrotek Monitor v10.1")
 
 with st.expander("⚙️ Configuración", expanded=True):
     col_conf1, col_conf2 = st.columns(2)
@@ -595,7 +584,7 @@ with tab_prod:
 
         st.download_button("📥 Descargar", data=convert_df_to_excel(df_p), file_name=f"Prod_{anio_p}.xlsx")
 
-# === PESTAÑA 3: PROYECTOS ===
+# === PESTAÑA 3: PROYECTOS (ESTRUCTURA v10.1) ===
 with tab_renta:
     df_pnl = cargar_pnl_historico()
     if not df_analitica.empty:
@@ -619,29 +608,72 @@ with tab_renta:
             df_h = cargar_detalle_horas_mes(sel_ids)
             df_s, _, bods = cargar_inventario_ubicacion_proyecto_v4(sel_ids, proys)
             df_c = cargar_compras_pendientes_v7_json_scanner(sel_ids, tc_usd)
-            # KPI NUEVO: Facturación Estimada
             df_fact_est = cargar_facturacion_estimada_v2(sel_ids, tc_usd)
             
-            k1,k2,k3,k4 = st.columns(4)
-            with k1: card_kpi("Ingresos", totales['Venta'], "border-green")
-            with k2: card_kpi("Instalación", totales['Instalación'], "border-blue")
-            with k3: card_kpi("Suministros", totales['Suministros'], "border-orange")
-            with k4: card_kpi("WIP", totales['WIP'], "border-yellow")
+            # CALCULOS FINALES v10.1
+            total_facturado = totales['Venta']
+            total_pendiente = df_fact_est['Monto_CRC'].sum() if not df_fact_est.empty else 0
+            total_ingreso_proyecto = total_facturado + total_pendiente
             
-            k5,k6,k7,k8 = st.columns(4)
-            with k5: card_kpi("Provisiones", totales['Provisión'], "border-red")
-            with k6: card_kpi("Ajustes Inv.", totales['Ajustes Inv'], "border-gray")
-            with k7: card_kpi("Retail Cost", totales['Costo Retail'], "border-orange")
-            with k8: card_kpi("Otros", totales['Otros Gastos'], "border-gray")
+            costo_transitorio = (
+                totales['Provisión'] + # Provisión es transitoria
+                (df_s['Valor_Total'].sum() if not df_s.empty else 0) + # Inventario Sitio
+                totales['WIP'] + 
+                (df_c['Monto_Pendiente'].sum() if not df_c.empty else 0) +
+                (df_h['Costo'].sum() if not df_h.empty else 0) # Mano Obra es transitoria
+            )
+            
+            costo_firme = (
+                totales['Instalación'] + 
+                totales['Suministros'] + 
+                totales['Costo Retail'] + 
+                totales['Otros Gastos'] + 
+                totales['Ajustes Inv']
+            )
+            
+            costo_total_impactado = costo_transitorio + costo_firme
+            margen = total_facturado - costo_total_impactado
+            pct_margen = (margen / total_facturado * 100) if total_facturado > 0 else 0
+            color_margen = "bg-alert-green" if pct_margen > 30 else ("bg-alert-warn" if pct_margen > 10 else "bg-alert-red")
 
-            st.markdown("#### Operativo")
-            o1,o2,o3,o4 = st.columns(4)
-            with o1: card_kpi("Inv. Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-purple", f"Bodegas: {len(bods)}")
-            with o2: card_kpi("Compras Pend.", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-teal")
-            with o3: card_kpi("Horas (Mes)", df_h['Costo'].sum() if not df_h.empty else 0, "border-blue")
-            # NUEVO KPI VISUAL
-            with o4: card_kpi("Proy. Facturación", df_fact_est['Monto_CRC'].sum() if not df_fact_est.empty else 0, "border-cyan")
+            # --- NIVEL 1: SEMÁFORO (Resumen) ---
+            st.markdown("#### 🚦 Semáforo del Proyecto")
+            k1, k2, k3, k4 = st.columns(4)
+            with k1: card_kpi("Ingreso Total Proy.", total_ingreso_proyecto, "border-green")
+            with k2: card_kpi("Costo Total Impactado", costo_total_impactado, "border-red")
+            with k3: card_kpi("MARGEN ACTUAL", margen, color_margen)
+            with k4: card_kpi("% Margen", pct_margen, "border-blue", formato="percent")
             
+            st.divider()
+            
+            # --- NIVEL 2: INGRESOS ---
+            st.markdown("#### 📥 Flujo de Ingresos")
+            i1, i2 = st.columns(2)
+            with i1: card_kpi("Facturado (Real)", total_facturado, "border-green")
+            with i2: card_kpi("Por Facturar (Pendiente)", total_pendiente, "border-gray")
+            
+            st.divider()
+
+            # --- NIVEL 3: COSTOS (Separados A/B) ---
+            c_trans, c_firme = st.columns(2)
+            
+            with c_trans:
+                st.markdown("#### ⚙️ Costos Transitorios (Vivos)")
+                card_kpi("Provisiones (Reservas)", totales['Provisión'], "border-purple")
+                card_kpi("Inventario en Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-purple")
+                card_kpi("WIP (En Proceso)", totales['WIP'], "border-yellow")
+                card_kpi("Compras Pendientes", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-teal")
+                card_kpi("Mano de Obra (Horas)", df_h['Costo'].sum() if not df_h.empty else 0, "border-blue") # MOVIDO AQUÍ
+            
+            with c_firme:
+                st.markdown("#### 📚 Costos Firmes (Contables)")
+                card_kpi("Instalación", totales['Instalación'], "border-orange")
+                card_kpi("Suministros", totales['Suministros'], "border-orange")
+                card_kpi("Costo Venta (Retail)", totales['Costo Retail'], "border-orange")
+                card_kpi("Ajustes Inv.", totales['Ajustes Inv'], "border-gray")
+                card_kpi("Otros Gastos", totales['Otros Gastos'], "border-gray")
+            
+            st.divider()
             t1, t2, t3, t4 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend."])
             with t1: st.dataframe(df_s, use_container_width=True)
             with t2: st.dataframe(df_c, use_container_width=True)
