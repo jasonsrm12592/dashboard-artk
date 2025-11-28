@@ -10,7 +10,7 @@ import ast
 
 # --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
 st.set_page_config(
-    page_title="Alrotek Monitor v10.1", 
+    page_title="Alrotek Monitor v10.2", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -60,7 +60,6 @@ st.markdown("""
         color: #95a5a6;
     }
     
-    /* Colores Semánticos */
     .border-green { border-left: 4px solid #27ae60; }
     .border-orange { border-left: 4px solid #d35400; }
     .border-yellow { border-left: 4px solid #f1c40f; }
@@ -70,11 +69,7 @@ st.markdown("""
     .border-teal { border-left: 4px solid #16a085; }
     .border-cyan { border-left: 4px solid #1abc9c; }
     .border-gray { border-left: 4px solid #7f8c8d; }
-    
-    /* Alertas de Margen */
-    .bg-alert-green { background-color: #e8f8f5; border-left: 5px solid #2ecc71; }
-    .bg-alert-warn { background-color: #fef9e7; border-left: 5px solid #f1c40f; }
-    .bg-alert-red { background-color: #fdedec; border-left: 5px solid #e74c3c; }
+    .bg-dark-blue { background-color: #f0f8ff; border-left: 5px solid #000080; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -441,7 +436,7 @@ def cargar_metas():
 
 # --- 5. INTERFAZ ---
 
-st.title("🚀 Alrotek Monitor v10.1")
+st.title("🚀 Alrotek Monitor v10.2")
 
 with st.expander("⚙️ Configuración", expanded=True):
     col_conf1, col_conf2 = st.columns(2)
@@ -584,7 +579,7 @@ with tab_prod:
 
         st.download_button("📥 Descargar", data=convert_df_to_excel(df_p), file_name=f"Prod_{anio_p}.xlsx")
 
-# === PESTAÑA 3: PROYECTOS (ESTRUCTURA v10.1) ===
+# === PESTAÑA 3: PROYECTOS (ESTRUCTURA v10.2) ===
 with tab_renta:
     df_pnl = cargar_pnl_historico()
     if not df_analitica.empty:
@@ -610,19 +605,20 @@ with tab_renta:
             df_c = cargar_compras_pendientes_v7_json_scanner(sel_ids, tc_usd)
             df_fact_est = cargar_facturacion_estimada_v2(sel_ids, tc_usd)
             
-            # CALCULOS FINALES v10.1
+            # CALCULOS FINALES v10.2
             total_facturado = totales['Venta']
             total_pendiente = df_fact_est['Monto_CRC'].sum() if not df_fact_est.empty else 0
             total_ingreso_proyecto = total_facturado + total_pendiente
             
-            costo_transitorio = (
-                totales['Provisión'] + # Provisión es transitoria
+            # Costo Operativo (SIN PROVISIÓN)
+            costo_operativo = (
                 (df_s['Valor_Total'].sum() if not df_s.empty else 0) + # Inventario Sitio
                 totales['WIP'] + 
                 (df_c['Monto_Pendiente'].sum() if not df_c.empty else 0) +
-                (df_h['Costo'].sum() if not df_h.empty else 0) # Mano Obra es transitoria
+                (df_h['Costo'].sum() if not df_h.empty else 0)
             )
             
+            # Costo Firme
             costo_firme = (
                 totales['Instalación'] + 
                 totales['Suministros'] + 
@@ -631,7 +627,8 @@ with tab_renta:
                 totales['Ajustes Inv']
             )
             
-            costo_total_impactado = costo_transitorio + costo_firme
+            # TOTAL IMPACTADO = FIRME + OPERATIVO (Provisión excluida del cálculo macro)
+            costo_total_impactado = costo_firme + costo_operativo
             margen = total_facturado - costo_total_impactado
             pct_margen = (margen / total_facturado * 100) if total_facturado > 0 else 0
             color_margen = "bg-alert-green" if pct_margen > 30 else ("bg-alert-warn" if pct_margen > 10 else "bg-alert-red")
@@ -654,24 +651,24 @@ with tab_renta:
             
             st.divider()
 
-            # --- NIVEL 3: COSTOS (Separados A/B) ---
-            c_trans, c_firme = st.columns(2)
+            # --- NIVEL 3: COSTOS (LADO A LADO) ---
+            c_firme_col, c_trans_col = st.columns(2)
             
-            with c_trans:
-                st.markdown("#### ⚙️ Costos Transitorios (Vivos)")
-                card_kpi("Provisiones (Reservas)", totales['Provisión'], "border-purple")
-                card_kpi("Inventario en Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-purple")
-                card_kpi("WIP (En Proceso)", totales['WIP'], "border-yellow")
-                card_kpi("Compras Pendientes", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-teal")
-                card_kpi("Mano de Obra (Horas)", df_h['Costo'].sum() if not df_h.empty else 0, "border-blue") # MOVIDO AQUÍ
-            
-            with c_firme:
+            with c_firme_col:
                 st.markdown("#### 📚 Costos Firmes (Contables)")
                 card_kpi("Instalación", totales['Instalación'], "border-orange")
                 card_kpi("Suministros", totales['Suministros'], "border-orange")
                 card_kpi("Costo Venta (Retail)", totales['Costo Retail'], "border-orange")
                 card_kpi("Ajustes Inv.", totales['Ajustes Inv'], "border-gray")
                 card_kpi("Otros Gastos", totales['Otros Gastos'], "border-gray")
+
+            with c_trans_col:
+                st.markdown("#### ⚙️ Costos Transitorios (Vivos)")
+                card_kpi("Provisiones (Reservas)", totales['Provisión'], "border-purple")
+                card_kpi("Inventario en Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-purple")
+                card_kpi("WIP (En Proceso)", totales['WIP'], "border-yellow")
+                card_kpi("Compras Pendientes", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-teal")
+                card_kpi("Mano de Obra (Horas)", df_h['Costo'].sum() if not df_h.empty else 0, "border-blue")
             
             st.divider()
             t1, t2, t3, t4 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend."])
