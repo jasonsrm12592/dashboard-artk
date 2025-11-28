@@ -247,7 +247,7 @@ def cargar_inventario_general():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        dominio = [['active', '=', True]]
+        dominio = ['|', ['active', '=', True], ['active', '=', False]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'default_code']})
         df = pd.DataFrame(registros)
@@ -755,3 +755,4 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
