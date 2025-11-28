@@ -10,7 +10,7 @@ import ast
 
 # --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
 st.set_page_config(
-    page_title="Alrotek Monitor v10.7", 
+    page_title="Alrotek Monitor v10.8", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -142,7 +142,7 @@ def config_plotly(fig):
     )
     return fig
 
-# --- 4. CARGA DE DATOS (OPTIMIZADA Y LIMPIA) ---
+# --- 4. CARGA DE DATOS ---
 @st.cache_data(ttl=900) 
 def cargar_datos_generales():
     try:
@@ -454,6 +454,17 @@ with st.spinner('Cargando...'):
     df_metas = cargar_metas()
     df_prod = cargar_detalle_productos()
     df_an = cargar_estructura_analitica()
+    
+    if not df_main.empty:
+        df_info = cargar_datos_clientes_extendido(df_main['ID_Cliente'].unique().tolist())
+        if not df_info.empty:
+            df_main = pd.merge(df_main, df_info, on='ID_Cliente', how='left')
+            df_main[['Provincia', 'Zona_Comercial', 'Categoria_Cliente']] = df_main[['Provincia', 'Zona_Comercial', 'Categoria_Cliente']].fillna('Sin Dato')
+        else:
+            # FIX: Inicializar columnas vacías si falla la carga extendida
+            df_main['Provincia'] = 'Sin Dato'
+            df_main['Zona_Comercial'] = 'Sin Dato'
+            df_main['Categoria_Cliente'] = 'Sin Dato'
 
 # === PESTAÑA 1: VISIÓN GENERAL ===
 with tab_kpis:
