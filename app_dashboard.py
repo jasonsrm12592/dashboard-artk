@@ -10,7 +10,7 @@ import ast
 
 # --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
 st.set_page_config(
-    page_title="Alrotek Monitor v9.7", 
+    page_title="Alrotek Monitor v9.8", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -152,15 +152,10 @@ def cargar_datos_generales():
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
             df['Mes'] = df['invoice_date'].dt.to_period('M').dt.to_timestamp()
             df['Mes_Num'] = df['invoice_date'].dt.month
-            
-            # Limpieza segura para Arrow
             df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
             df['ID_Cliente'] = df['partner_id'].apply(lambda x: x[0] if x else 0)
             df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
-            
-            # Eliminar columnas complejas
             df = df.drop(columns=['partner_id', 'invoice_user_id'], errors='ignore')
-            
             df['Venta_Neta'] = df['amount_untaxed_signed']
             df = df[~df['name'].str.contains("WT-", case=False, na=False)]
         return df
@@ -179,14 +174,9 @@ def cargar_cartera():
         if not df.empty:
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
             df['invoice_date_due'] = pd.to_datetime(df['invoice_date_due'])
-            
-            # Limpieza
             df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
             df['Vendedor'] = df['invoice_user_id'].apply(lambda x: x[1] if x else "Sin Asignar")
-            
-            # Eliminar columnas complejas
             df = df.drop(columns=['partner_id', 'invoice_user_id'], errors='ignore')
-            
             df['Dias_Vencido'] = (pd.Timestamp.now() - df['invoice_date_due']).dt.days
             def bucket(d): return "Por Vencer" if d < 0 else ("0-30" if d<=30 else ("31-60" if d<=60 else ("61-90" if d<=90 else "+90")))
             df['Antiguedad'] = df['Dias_Vencido'].apply(bucket)
@@ -208,10 +198,7 @@ def cargar_datos_clientes_extendido(ids_clientes):
             def procesar_campo_studio(valor): return str(valor[1]) if isinstance(valor, list) else (str(valor) if valor else "No Definido")
             df['Zona_Comercial'] = df['x_studio_zona'].apply(procesar_campo_studio) if 'x_studio_zona' in df.columns else "N/A"
             df['Categoria_Cliente'] = df['x_studio_categoria_cliente'].apply(procesar_campo_studio) if 'x_studio_categoria_cliente' in df.columns else "N/A"
-            
-            # Limpieza
             df = df.drop(columns=['state_id', 'x_studio_zona', 'x_studio_categoria_cliente'], errors='ignore')
-            
             df.rename(columns={'id': 'ID_Cliente'}, inplace=True)
             return df[['ID_Cliente', 'Provincia', 'Zona_Comercial', 'Categoria_Cliente']]
         return pd.DataFrame()
@@ -233,10 +220,7 @@ def cargar_detalle_productos():
             df['ID_Factura'] = df['move_id'].apply(lambda x: x[0] if x else 0)
             df['ID_Producto'] = df['product_id'].apply(lambda x: x[0] if x else 0)
             df['Producto'] = df['product_id'].apply(lambda x: x[1] if x else "Otros")
-            
-            # Limpieza
             df = df.drop(columns=['product_id', 'move_id'], errors='ignore')
-            
             df['Venta_Neta'] = df['credit'] - df['debit']
         return df
     except: return pd.DataFrame()
@@ -247,6 +231,7 @@ def cargar_inventario_general():
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        # FIX: Traer activos y archivados para evitar "Otros"
         dominio = ['|', ['active', '=', True], ['active', '=', False]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'default_code']})
@@ -272,15 +257,10 @@ def cargar_inventario_baja_rotacion():
         data_q = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [[['location_id', 'child_of', ids_locs], ['quantity', '>', 0], ['company_id', '=', COMPANY_ID]]])], {'fields': ['product_id', 'quantity', 'location_id']})
         df = pd.DataFrame(data_q)
         if df.empty: return pd.DataFrame(), "Bodega vacía"
-        
-        # Extracción segura
         df['pid'] = df['product_id'].apply(lambda x: x[0] if isinstance(x,list) else x)
         df['Producto'] = df['product_id'].apply(lambda x: x[1] if isinstance(x,list) else "-")
         df['Ubicacion'] = df['location_id'].apply(lambda x: x[1] if isinstance(x,list) else "-")
-        
-        # Eliminar columnas complejas
         df = df.drop(columns=['product_id', 'location_id'], errors='ignore')
-        
         info = pd.DataFrame(models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [df['pid'].unique().tolist()], {'fields': ['standard_price', 'product_tmpl_id', 'detailed_type']}))
         info['Costo'] = info['standard_price']
         info['tmpl_id'] = info['product_tmpl_id'].apply(lambda x: x[0] if x else 0)
@@ -324,22 +304,15 @@ def cargar_pnl_historico():
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         ids = list(set(TODOS_LOS_IDS + models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])))
-        data = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [[['account_id', 'in', ids], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]])], {'fields': ['date', 'name', 'account_id', 'debit', 'credit', 'analytic_distribution']})
+        data = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [[['account_id', 'in', ids], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]])], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution']})
         df = pd.DataFrame(data)
         if not df.empty:
-            # 1. Extracción segura
-            df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0] if x else 0)
-            df['Cuenta'] = df['account_id'].apply(lambda x: x[1] if x else "")
-            
+            df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0])
             def get_aid(d):
                 try: return int(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0])
                 except: return None
             df['id_cuenta_analitica'] = df['analytic_distribution'].apply(get_aid)
-            
-            # 2. ELIMINAR COLUMNAS COMPLEJAS (ESTO SOLUCIONA EL ARROW INVALID)
             df = df.drop(columns=['account_id', 'analytic_distribution'], errors='ignore')
-            
-            # 3. Cálculos
             df['Monto_Neto'] = df['credit'] - df['debit']
             def clasificar(id_acc):
                 if id_acc in IDS_INGRESOS: return "Venta"
@@ -421,12 +394,52 @@ def cargar_compras_pendientes_v7_json_scanner(ids_an, tc):
         df['Monto_Pendiente'] = df.apply(lambda r: (r['qty_pending']*r['price_unit']) * (tc if r['currency_id'] and r['currency_id'][1]=='USD' else 1), axis=1)
         df['Proveedor'] = df['partner_id'].apply(lambda x: x[1])
         df['OC'] = df['order_id'].apply(lambda x: x[1])
-        
-        # Drop columns
         df = df.drop(columns=['order_id', 'partner_id', 'analytic_distribution', 'currency_id'], errors='ignore')
-        
         return df[['OC', 'Proveedor', 'name', 'Monto_Pendiente']]
     except: return pd.DataFrame()
+
+# --- NUEVA FUNCIÓN: FACTURACIÓN ESTIMADA MEJORADA (Auto-búsqueda de proyecto) ---
+@st.cache_data(ttl=900)
+def cargar_facturacion_estimada_v2(ids_analiticas, tc_usd):
+    try:
+        if not ids_analiticas: return pd.DataFrame()
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
+        # 1. Buscar proyectos asociados a las analíticas
+        ids_clean_an = [int(x) for x in ids_analiticas if pd.notna(x) and x != 0]
+        ids_proys = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', ids_clean_an]]])
+        
+        if not ids_proys: return pd.DataFrame()
+        
+        # 2. Obtener nombres de proyectos para buscar en facturas
+        proyectos_data = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'read', [ids_proys], {'fields': ['name']})
+        if not proyectos_data: return pd.DataFrame()
+        
+        nombres_buscar = [p['name'] for p in proyectos_data if p['name']]
+        if not nombres_buscar: return pd.DataFrame()
+        
+        # 3. Buscar facturas estimadas (Modelo x_facturas.proyectos)
+        # Usamos 'ilike' con el primer nombre encontrado (limitación de búsqueda simple) o iteramos
+        # Para hacerlo robusto, buscamos por el primer proyecto encontrado (ajustable)
+        nombre_buscar = nombres_buscar[0] 
+        
+        dominio = [['x_studio_field_sFPxe', 'ilike', nombre_buscar], ['x_studio_facturado', '=', False]]
+        ids_fact = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'search', [dominio])
+        
+        if not ids_fact: return pd.DataFrame()
+        
+        registros = models.execute_kw(DB, uid, PASSWORD, 'x_facturas.proyectos', 'read', [ids_fact], {'fields': ['x_name', 'x_Monto', 'x_Fecha']})
+        df = pd.DataFrame(registros)
+        
+        if not df.empty:
+            df['Monto_CRC'] = df['x_Monto'] * tc_usd
+            df['Hito'] = df['x_name'] if 'x_name' in df.columns else "Hito"
+            return df
+        return pd.DataFrame()
+    except Exception as e:
+        return pd.DataFrame()
 
 def cargar_metas():
     if os.path.exists("metas.xlsx"):
@@ -439,7 +452,7 @@ def cargar_metas():
 
 # --- 5. INTERFAZ ---
 
-st.title("🚀 Alrotek Monitor v9.7")
+st.title("🚀 Alrotek Monitor v9.8 (Final Corregida)")
 
 with st.expander("⚙️ Configuración", expanded=True):
     col_conf1, col_conf2 = st.columns(2)
@@ -602,9 +615,12 @@ with tab_renta:
                       for k in ['Venta','Instalación','Suministros','WIP','Provisión','Costo Retail','Otros Gastos']}
             totales['Ajustes Inv'] = df_f[df_f['Clasificacion']=='Ajustes Inv']['Monto_Neto'].sum() if not df_f.empty else 0
             
+            # Cargas Operativas
             df_h = cargar_detalle_horas_mes(sel_ids)
             df_s, _, bods = cargar_inventario_ubicacion_proyecto_v4(sel_ids, proys)
             df_c = cargar_compras_pendientes_v7_json_scanner(sel_ids, tc_usd)
+            # KPI NUEVO: Facturación Estimada
+            df_fact_est = cargar_facturacion_estimada_v2(sel_ids, tc_usd)
             
             k1,k2,k3,k4 = st.columns(4)
             with k1: card_kpi("Ingresos", totales['Venta'], "border-green")
@@ -619,15 +635,18 @@ with tab_renta:
             with k8: card_kpi("Otros", totales['Otros Gastos'], "border-gray")
 
             st.markdown("#### Operativo")
-            o1,o2,o3 = st.columns(3)
+            o1,o2,o3,o4 = st.columns(4)
             with o1: card_kpi("Inv. Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-purple", f"Bodegas: {len(bods)}")
             with o2: card_kpi("Compras Pend.", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-teal")
             with o3: card_kpi("Horas (Mes)", df_h['Costo'].sum() if not df_h.empty else 0, "border-blue")
+            # NUEVO KPI VISUAL
+            with o4: card_kpi("Proy. Facturación", df_fact_est['Monto_CRC'].sum() if not df_fact_est.empty else 0, "border-cyan")
             
-            t1, t2, t3 = st.tabs(["Inventario", "Compras", "Contabilidad"])
+            t1, t2, t3, t4 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend."])
             with t1: st.dataframe(df_s, use_container_width=True)
             with t2: st.dataframe(df_c, use_container_width=True)
             with t3: st.dataframe(df_f, use_container_width=True)
+            with t4: st.dataframe(df_fact_est, use_container_width=True)
 
 # === PESTAÑA 4: BAJA ROTACIÓN ===
 with tab_inv:
@@ -755,4 +774,3 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
-
