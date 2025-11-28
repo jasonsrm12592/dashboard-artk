@@ -10,7 +10,7 @@ import ast
 
 # --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
 st.set_page_config(
-    page_title="Alrotek Monitor v10.6", 
+    page_title="Alrotek Monitor v10.7", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -440,7 +440,7 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-st.title("🚀 Alrotek Monitor v10.6")
+st.title("🚀 Alrotek Monitor v10.7")
 
 with st.expander("⚙️ Configuración", expanded=True):
     col_conf1, col_conf2 = st.columns(2)
@@ -453,7 +453,7 @@ with st.spinner('Cargando...'):
     df_main = cargar_datos_generales()
     df_metas = cargar_metas()
     df_prod = cargar_detalle_productos()
-    df_an = cargar_analitica()
+    df_an = cargar_estructura_analitica()
 
 # === PESTAÑA 1: VISIÓN GENERAL ===
 with tab_kpis:
@@ -521,7 +521,7 @@ with tab_kpis:
             r_fin['T'] = r_fin.apply(txt, axis=1)
             st.plotly_chart(config_plotly(go.Figure(go.Bar(x=r_fin.sort_values('Venta_Neta').tail(10)['Venta_Neta'], y=r_fin.sort_values('Venta_Neta').tail(10)['Vendedor'], orientation='h', text=r_fin.sort_values('Venta_Neta').tail(10)['T'], textposition='auto', marker_color='#2ecc71'))), use_container_width=True)
 
-# === PESTAÑA 2: PROYECTOS (ESTRUCTURA v10.6 - ALERTA) ===
+# === PESTAÑA 2: PROYECTOS (ESTRUCTURA v10.7) ===
 with tab_renta:
     df_pnl = cargar_pnl_historico()
     if not df_an.empty:
@@ -543,11 +543,11 @@ with tab_renta:
             
             # Cargas Operativas
             df_h = cargar_detalle_horas_mes(sel_ids)
-            df_s = cargar_stock_sitio(sel_ids, proys)
+            df_s, _, bods = cargar_inventario_ubicacion_proyecto_v4(sel_ids, proys)
             df_c = cargar_compras_pendientes_v7_json_scanner(sel_ids, tc_usd)
             df_fe = cargar_facturacion_estimada_v2(sel_ids, tc_usd)
             
-            # CALCULOS FINALES v10.6 (ALERTA OPERATIVA)
+            # CALCULOS FINALES v10.7 (ALERTA OPERATIVA)
             # 1. Ingresos (Total Proyecto)
             total_fact = totales['Venta']
             total_pend = df_fe['Monto_CRC'].sum() if not df_fe.empty else 0
