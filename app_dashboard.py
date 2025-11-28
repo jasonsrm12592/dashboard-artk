@@ -10,7 +10,7 @@ import ast
 
 # --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
 st.set_page_config(
-    page_title="Alrotek Monitor v10.2", 
+    page_title="Alrotek Monitor v10.6", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -60,6 +60,7 @@ st.markdown("""
         color: #95a5a6;
     }
     
+    /* Colores Semánticos */
     .border-green { border-left: 4px solid #27ae60; }
     .border-orange { border-left: 4px solid #d35400; }
     .border-yellow { border-left: 4px solid #f1c40f; }
@@ -69,7 +70,12 @@ st.markdown("""
     .border-teal { border-left: 4px solid #16a085; }
     .border-cyan { border-left: 4px solid #1abc9c; }
     .border-gray { border-left: 4px solid #7f8c8d; }
+    
+    /* Fondos de Alerta */
     .bg-dark-blue { background-color: #f0f8ff; border-left: 5px solid #000080; }
+    .bg-alert-green { background-color: #e8f8f5; border-left: 5px solid #2ecc71; }
+    .bg-alert-warn { background-color: #fef9e7; border-left: 5px solid #f1c40f; }
+    .bg-alert-red { background-color: #fdedec; border-left: 5px solid #e74c3c; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -136,7 +142,7 @@ def config_plotly(fig):
     )
     return fig
 
-# --- 4. CARGA DE DATOS ---
+# --- 4. CARGA DE DATOS (OPTIMIZADA Y LIMPIA) ---
 @st.cache_data(ttl=900) 
 def cargar_datos_generales():
     try:
@@ -268,7 +274,6 @@ def cargar_inventario_baja_rotacion():
         if ids_tmpl_kits: df = df[~df['tmpl_id'].isin(ids_tmpl_kits)]
         df = df[df['detailed_type'] == 'product']
         df['Valor'] = df['quantity'] * df['Costo']
-        if df.empty: return pd.DataFrame(), "Sin stock"
         moves = models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'read', [models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'search', [[['product_id', 'in', df['pid'].unique().tolist()], ['state', '=', 'done'], ['date', '>=', (datetime.now()-timedelta(days=365)).strftime('%Y-%m-%d')], ['location_dest_id.usage', 'in', ['customer', 'production']]]])], {'fields': ['product_id', 'date']})
         mapa = pd.DataFrame(moves)
         mapa_dict = {}
@@ -435,51 +440,31 @@ def cargar_metas():
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
 
 # --- 5. INTERFAZ ---
-
-st.title("🚀 Alrotek Monitor v10.2")
+st.title("🚀 Alrotek Monitor v10.6")
 
 with st.expander("⚙️ Configuración", expanded=True):
     col_conf1, col_conf2 = st.columns(2)
     with col_conf1: tc_usd = st.number_input("TC (USD -> CRC)", value=515)
     with col_conf2: st.info(f"TC: ₡{tc_usd}")
 
-tab_kpis, tab_prod, tab_renta, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs([
-    "📊 Visión General", 
-    "📦 Productos", 
-    "📈 Proyectos", 
-    "🕸️ Baja Rotación", 
-    "💰 Cartera",
-    "👥 Segmentación",
-    "💼 Vendedores",
-    "🔍 Radiografía"
-])
+tab_kpis, tab_renta, tab_prod, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs(["📊 Visión General", "📈 Rentabilidad Proyectos", "📦 Productos", "🕸️ Baja Rotación", "💰 Cartera", "👥 Segmentación", "💼 Vendedores", "🔍 Radiografía"])
 
 with st.spinner('Cargando...'):
     df_main = cargar_datos_generales()
     df_metas = cargar_metas()
     df_prod = cargar_detalle_productos()
-    df_analitica = cargar_estructura_analitica()
-    
-    if not df_main.empty:
-        df_info = cargar_datos_clientes_extendido(df_main['ID_Cliente'].unique().tolist())
-        if not df_info.empty:
-            df_main = pd.merge(df_main, df_info, on='ID_Cliente', how='left')
-            df_main[['Provincia', 'Zona_Comercial', 'Categoria_Cliente']] = df_main[['Provincia', 'Zona_Comercial', 'Categoria_Cliente']].fillna('Sin Dato')
-        else:
-            df_main['Provincia'] = 'Sin Dato'
+    df_an = cargar_analitica()
 
 # === PESTAÑA 1: VISIÓN GENERAL ===
 with tab_kpis:
     if not df_main.empty:
         col_f, _ = st.columns([1,3])
         with col_f: anio_sel = st.selectbox("📅 Año Fiscal", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True))
-        
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
         df_ant = df_main[df_main['invoice_date'].dt.year == (anio_sel - 1)]
         
         venta = df_anio['Venta_Neta'].sum()
-        venta_ant = df_ant['Venta_Neta'].sum()
-        delta = ((venta - venta_ant) / venta_ant * 100) if venta_ant > 0 else 0
+        delta = ((venta - df_ant['Venta_Neta'].sum()) / df_ant['Venta_Neta'].sum() * 100) if df_ant['Venta_Neta'].sum() > 0 else 0
         meta = df_metas[df_metas['Anio'] == anio_sel]['Meta'].sum()
         
         c1, c2, c3, c4 = st.columns(4)
@@ -489,26 +474,22 @@ with tab_kpis:
         with c4: card_kpi("Ticket Prom.", (venta/df_anio['name'].nunique()) if df_anio['name'].nunique()>0 else 0, "border-purple")
         
         st.divider()
-        st.download_button("📥 Descargar", data=convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'Provincia', 'Venta_Neta']]), file_name=f"Ventas_{anio_sel}.xlsx")
+        st.download_button("📥 Descargar", data=convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'amount_untaxed_signed']]), file_name=f"Ventas_{anio_sel}.xlsx")
 
         st.markdown(f"### 🎯 Cumplimiento de Meta ({anio_sel})")
         v_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
         v_meta = df_metas[df_metas['Anio'] == anio_sel].groupby('Mes_Num')['Meta'].sum().reset_index()
-        
         df_gm = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
         df_gm['Mes'] = df_gm['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
         
-        colores = ['#2ecc71' if r >= m else '#e74c3c' for r, m in zip(df_gm['Actual'], df_gm['Meta'])]
         fig_m = go.Figure()
-        fig_m.add_trace(go.Bar(x=df_gm['Mes'], y=df_gm['Actual'], name='Actual', marker_color=colores))
+        fig_m.add_trace(go.Bar(x=df_gm['Mes'], y=df_gm['Actual'], name='Actual', marker_color=['#2ecc71' if r>=m else '#e74c3c' for r,m in zip(df_gm['Actual'], df_gm['Meta'])]))
         fig_m.add_trace(go.Scatter(x=df_gm['Mes'], y=df_gm['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
         st.plotly_chart(config_plotly(fig_m), use_container_width=True)
 
         st.divider()
-
         st.markdown(f"### 🗓️ Comparativo: {anio_sel} vs {anio_sel-1}")
         v_ant_g = df_ant.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
-        
         df_gc = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_ant_g, on='Mes_Num', how='left').fillna(0)
         df_gc['Mes'] = df_gc['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
         
@@ -518,75 +499,36 @@ with tab_kpis:
         st.plotly_chart(config_plotly(fig_c), use_container_width=True)
 
         st.divider()
-
-        c_graf_mix, c_graf_top = st.columns(2)
-        
-        with c_graf_mix:
-            st.subheader("📊 Mix de Ventas por Plan")
+        c_mix, c_top = st.columns(2)
+        with c_mix:
+            st.subheader("📊 Mix por Plan")
             if not df_prod.empty:
                 df_l = df_prod[df_prod['date'].dt.year == anio_sel].copy()
-                mapa = dict(zip(df_analitica['id_cuenta_analitica'].astype(str), df_analitica['Plan_Nombre'])) if not df_analitica.empty else {}
-                def clasif(d):
-                    if not d: return "Retail"
-                    try: return mapa.get(str(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0]), "Otro")
-                    except: return "Otro"
-                df_l['Plan'] = df_l['analytic_distribution'].apply(clasif)
-                df_l['Mes'] = df_l['date'].dt.strftime('%m-%b')
-                df_l['Mes_Num'] = df_l['date'].dt.month
-                df_grp = df_l.groupby(['Mes_Num','Mes','Plan'])['Venta_Neta'].sum().reset_index().sort_values('Mes_Num')
-                st.plotly_chart(config_plotly(px.bar(df_grp, x='Mes', y='Venta_Neta', color='Plan', title="")), use_container_width=True)
-
-        with c_graf_top:
+                mapa = dict(zip(df_an['id_cuenta_analitica'].astype(str), df_an['Plan_Nombre'])) if not df_an.empty else {}
+                df_l['Plan'] = df_l['analytic_distribution'].apply(lambda d: mapa.get(str(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0]), "Otro") if d else "Retail")
+                st.plotly_chart(config_plotly(px.bar(df_l.groupby(['date','Plan'])['Venta_Neta'].sum().reset_index().assign(Mes=lambda x: x.date.dt.strftime('%m-%b')), x='Mes', y='Venta_Neta', color='Plan', title="")), use_container_width=True)
+        with c_top:
             st.subheader("🏆 Top Vendedores")
-            r_act = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
-            r_ant = df_ant.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
+            r_act = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index()
+            r_ant = df_ant.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta':'Venta_Ant'})
             r_fin = pd.merge(r_act, r_ant, on='Vendedor', how='left').fillna(0)
-            r_fin = r_fin.sort_values('Actual', ascending=True).tail(10)
             
             def txt(row):
-                delta = ((row['Actual'] - row['Anterior']) / row['Anterior'] * 100) if row['Anterior']>0 else 100
-                icon = "⬆️" if delta >= 0 else "⬇️"
-                return f"₡{row['Actual']/1e6:.1f}M {icon} {delta:.0f}%"
+                d = ((row['Venta_Neta'] - row['Venta_Ant'])/row['Venta_Ant']*100) if row['Venta_Ant']>0 else 100
+                i = "⬆️" if d>=0 else "⬇️"
+                return f"₡{row['Venta_Neta']/1e6:.1f}M {i} {d:.0f}%"
             
-            r_fin['Texto'] = r_fin.apply(txt, axis=1)
-            fig_v = go.Figure(go.Bar(x=r_fin['Actual'], y=r_fin['Vendedor'], orientation='h', text=r_fin['Texto'], textposition='auto', marker_color='#2ecc71'))
-            st.plotly_chart(config_plotly(fig_v), use_container_width=True)
+            r_fin['T'] = r_fin.apply(txt, axis=1)
+            st.plotly_chart(config_plotly(go.Figure(go.Bar(x=r_fin.sort_values('Venta_Neta').tail(10)['Venta_Neta'], y=r_fin.sort_values('Venta_Neta').tail(10)['Vendedor'], orientation='h', text=r_fin.sort_values('Venta_Neta').tail(10)['T'], textposition='auto', marker_color='#2ecc71'))), use_container_width=True)
 
-# === PESTAÑA 2: PRODUCTOS ===
-with tab_prod:
-    df_cat = cargar_inventario_general()
-    if not df_prod.empty:
-        c_p1, c_p2 = st.columns([1, 3])
-        with c_p1: 
-            anio_p = st.selectbox("Año", sorted(df_prod['date'].dt.year.unique(), reverse=True))
-            tipo_prod = st.radio("Filtro Tipo:", ["Todos", "Almacenable", "Servicio"])
-            metrica = st.radio("Ordenar Top por:", ["Monto (₡)", "Cantidad (Unid)"])
-            
-        df_p = df_prod[df_prod['date'].dt.year == anio_p].merge(df_cat[['ID_Producto', 'Tipo']], on='ID_Producto', how='left')
-        df_p['Tipo'] = df_p['Tipo'].fillna('Otro')
-        
-        if tipo_prod != "Todos":
-            df_p = df_p[df_p['Tipo'] == tipo_prod]
-            
-        col_m1, col_m2 = st.columns([1, 2])
-        with col_m1: 
-            st.plotly_chart(config_plotly(px.pie(df_p.groupby('Tipo')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Tipo', hole=0.5, title="Mix Venta")), use_container_width=True)
-        with col_m2:
-            st.subheader("Top 10 Productos")
-            col_sort = 'Venta_Neta' if metrica == "Monto (₡)" else 'quantity'
-            df_top = df_p.groupby('Producto')[[col_sort]].sum().sort_values(col_sort, ascending=False).head(10).reset_index().sort_values(col_sort, ascending=True)
-            st.plotly_chart(config_plotly(px.bar(df_top, x=col_sort, y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
-
-        st.download_button("📥 Descargar", data=convert_df_to_excel(df_p), file_name=f"Prod_{anio_p}.xlsx")
-
-# === PESTAÑA 3: PROYECTOS (ESTRUCTURA v10.2) ===
+# === PESTAÑA 2: PROYECTOS (ESTRUCTURA v10.6 - ALERTA) ===
 with tab_renta:
     df_pnl = cargar_pnl_historico()
-    if not df_analitica.empty:
-        mapa_c = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Plan_Nombre']))
-        mapa_n = dict(zip(df_analitica['id_cuenta_analitica'].astype(float), df_analitica['Cuenta_Nombre']))
-        
+    if not df_an.empty:
         c1, c2 = st.columns(2)
+        mapa_c = dict(zip(df_an['id_cuenta_analitica'].astype(float), df_an['Plan_Nombre']))
+        mapa_n = dict(zip(df_an['id_cuenta_analitica'].astype(float), df_an['Cuenta_Nombre']))
+        
         with c1: planes = st.multiselect("Planes:", sorted(list(set(mapa_c.values()))))
         posibles = [id for id, p in mapa_c.items() if p in planes] if planes else []
         nombres = [mapa_n[id] for id in posibles]
@@ -601,81 +543,87 @@ with tab_renta:
             
             # Cargas Operativas
             df_h = cargar_detalle_horas_mes(sel_ids)
-            df_s, _, bods = cargar_inventario_ubicacion_proyecto_v4(sel_ids, proys)
+            df_s = cargar_stock_sitio(sel_ids, proys)
             df_c = cargar_compras_pendientes_v7_json_scanner(sel_ids, tc_usd)
-            df_fact_est = cargar_facturacion_estimada_v2(sel_ids, tc_usd)
+            df_fe = cargar_facturacion_estimada_v2(sel_ids, tc_usd)
             
-            # CALCULOS FINALES v10.2
-            total_facturado = totales['Venta']
-            total_pendiente = df_fact_est['Monto_CRC'].sum() if not df_fact_est.empty else 0
-            total_ingreso_proyecto = total_facturado + total_pendiente
+            # CALCULOS FINALES v10.6 (ALERTA OPERATIVA)
+            # 1. Ingresos (Total Proyecto)
+            total_fact = totales['Venta']
+            total_pend = df_fe['Monto_CRC'].sum() if not df_fe.empty else 0
+            total_ing = total_fact + total_pend
             
-            # Costo Operativo (SIN PROVISIÓN)
-            costo_operativo = (
-                (df_s['Valor_Total'].sum() if not df_s.empty else 0) + # Inventario Sitio
-                totales['WIP'] + 
-                (df_c['Monto_Pendiente'].sum() if not df_c.empty else 0) +
-                (df_h['Costo'].sum() if not df_h.empty else 0)
+            # 2. Costo Operativo (TRANSITORIO - SOLO ALERTA)
+            costo_vivo = (
+                (df_s['Valor_Total'].sum() if not df_s.empty else 0) + # Inventario
+                totales['WIP'] + # WIP
+                (df_c['Monto_Pendiente'].sum() if not df_c.empty else 0) + # Compras Pend
+                (df_h['Costo'].sum() if not df_h.empty else 0) # Horas
             )
             
-            # Costo Firme
-            costo_firme = (
-                totales['Instalación'] + 
-                totales['Suministros'] + 
-                totales['Costo Retail'] + 
-                totales['Otros Gastos'] + 
-                totales['Ajustes Inv']
-            )
+            # 3. Margen Alerta (Ingreso Total - Costo Vivo)
+            margen_alerta = total_ing - costo_vivo
+            pct_alerta = (margen_alerta / total_ing * 100) if total_ing > 0 else 0
             
-            # TOTAL IMPACTADO = FIRME + OPERATIVO (Provisión excluida del cálculo macro)
-            costo_total_impactado = costo_firme + costo_operativo
-            margen = total_facturado - costo_total_impactado
-            pct_margen = (margen / total_facturado * 100) if total_facturado > 0 else 0
-            color_margen = "bg-alert-green" if pct_margen > 30 else ("bg-alert-warn" if pct_margen > 10 else "bg-alert-red")
+            color_alerta = "bg-alert-green" if pct_alerta > 30 else ("bg-alert-warn" if pct_alerta > 10 else "bg-alert-red")
 
-            # --- NIVEL 1: SEMÁFORO (Resumen) ---
-            st.markdown("#### 🚦 Semáforo del Proyecto")
+            st.markdown("#### 🚦 Semáforo de Alerta Operativa")
+            st.caption("Margen calculado como: (Total Ingresos - Costos Vivos). Excluye costos contables cerrados y provisiones.")
+            
             k1, k2, k3, k4 = st.columns(4)
-            with k1: card_kpi("Ingreso Total Proy.", total_ingreso_proyecto, "border-green")
-            with k2: card_kpi("Costo Total Impactado", costo_total_impactado, "border-red")
-            with k3: card_kpi("MARGEN ACTUAL", margen, color_margen)
-            with k4: card_kpi("% Margen", pct_margen, "border-blue", formato="percent")
+            with k1: card_kpi("Ingreso Total Proy.", total_ing, "border-green")
+            with k2: card_kpi("Costo Vivo (Alerta)", costo_vivo, "border-red")
+            with k3: card_kpi("MARGEN ALERTA", margen_alerta, color_alerta)
+            with k4: card_kpi("% Cobertura", pct_alerta, "border-blue", formato="percent")
             
             st.divider()
             
-            # --- NIVEL 2: INGRESOS ---
             st.markdown("#### 📥 Flujo de Ingresos")
             i1, i2 = st.columns(2)
-            with i1: card_kpi("Facturado (Real)", total_facturado, "border-green")
-            with i2: card_kpi("Por Facturar (Pendiente)", total_pendiente, "border-gray")
+            with i1: card_kpi("Facturado (Real)", total_fact, "border-green")
+            with i2: card_kpi("Por Facturar (Pendiente)", total_pend, "border-gray")
             
             st.divider()
 
-            # --- NIVEL 3: COSTOS (LADO A LADO) ---
-            c_firme_col, c_trans_col = st.columns(2)
+            # LADO A LADO (IZQ: FIRMES / DER: TRANSITORIOS)
+            c_izq, c_der = st.columns(2)
             
-            with c_firme_col:
-                st.markdown("#### 📚 Costos Firmes (Contables)")
+            with c_izq:
+                st.markdown("#### 📚 Costos Firmes (Contables - YA CERRADOS)")
+                st.caption("Estos costos NO restan en el semáforo de alerta.")
                 card_kpi("Instalación", totales['Instalación'], "border-orange")
                 card_kpi("Suministros", totales['Suministros'], "border-orange")
                 card_kpi("Costo Venta (Retail)", totales['Costo Retail'], "border-orange")
                 card_kpi("Ajustes Inv.", totales['Ajustes Inv'], "border-gray")
                 card_kpi("Otros Gastos", totales['Otros Gastos'], "border-gray")
 
-            with c_trans_col:
-                st.markdown("#### ⚙️ Costos Transitorios (Vivos)")
-                card_kpi("Provisiones (Reservas)", totales['Provisión'], "border-purple")
+            with c_der:
+                st.markdown("#### ⚙️ Costos Transitorios (Vivos - ALERTA)")
+                st.caption("Estos costos SÍ restan en el semáforo.")
                 card_kpi("Inventario en Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-purple")
                 card_kpi("WIP (En Proceso)", totales['WIP'], "border-yellow")
                 card_kpi("Compras Pendientes", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-teal")
                 card_kpi("Mano de Obra (Horas)", df_h['Costo'].sum() if not df_h.empty else 0, "border-blue")
+                st.markdown("---")
+                card_kpi("Provisiones (Informativo)", totales['Provisión'], "border-purple", "Reserva contable (No suma)") 
             
             st.divider()
             t1, t2, t3, t4 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend."])
             with t1: st.dataframe(df_s, use_container_width=True)
             with t2: st.dataframe(df_c, use_container_width=True)
             with t3: st.dataframe(df_f, use_container_width=True)
-            with t4: st.dataframe(df_fact_est, use_container_width=True)
+            with t4: st.dataframe(df_fe, use_container_width=True)
+
+# === OTRAS PESTAÑAS (Resumidas) ===
+with tab_prod:
+    df_cat = cargar_inventario_general()
+    if not df_prod.empty:
+        c1, c2 = st.columns([1,3])
+        with c1: anio = st.selectbox("Año", sorted(df_prod['date'].dt.year.unique(), reverse=True))
+        df_p = df_prod[df_prod['date'].dt.year == anio].merge(df_cat[['ID_Producto','Tipo']], on='ID_Producto', how='left').fillna({'Tipo':'Otro'})
+        c_m1, c_m2 = st.columns([1,2])
+        with c_m1: st.plotly_chart(config_plotly(px.pie(df_p.groupby('Tipo')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Tipo')), use_container_width=True)
+        with c_m2: st.plotly_chart(config_plotly(px.bar(df_p.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index(), x='Venta_Neta', y='Producto', orientation='h')), use_container_width=True)
 
 # === PESTAÑA 4: BAJA ROTACIÓN ===
 with tab_inv:
@@ -684,12 +632,10 @@ with tab_inv:
         if not df_h.empty:
             days = st.slider("Días Inactivo:", 0, 720, 365)
             df_show = df_h[df_h['Dias_Sin_Salida'] >= days]
-            
             c1, c2, c3 = st.columns(3)
             with c1: card_kpi("Capital Estancado", df_show['Valor'].sum(), "border-red")
             with c2: card_kpi("Total Items", len(df_h), "border-gray", formato="numero")
             with c3: card_kpi("Items Críticos", len(df_show), "border-orange", formato="numero")
-            
             st.dataframe(df_show[['Producto','Ubicacion','quantity','Dias_Sin_Salida','Valor']], use_container_width=True)
         else: st.info(status)
 
@@ -699,12 +645,10 @@ with tab_cx:
     if not df_cx.empty:
         deuda = df_cx['amount_residual'].sum()
         vencido = df_cx[df_cx['Dias_Vencido']>0]['amount_residual'].sum()
-        
         c1, c2, c3 = st.columns(3)
         with c1: card_kpi("Por Cobrar", deuda, "border-blue")
         with c2: card_kpi("Vencido", vencido, "border-red")
         with c3: card_kpi("Salud", f"{(1-(vencido/deuda))*100:.1f}% al día" if deuda>0 else "100%", "border-green", formato="raw")
-        
         c_g, c_t = st.columns([2,1])
         with c_g:
             df_b = df_cx.groupby('Antiguedad')['amount_residual'].sum().reset_index()
@@ -717,25 +661,21 @@ with tab_cli:
     if not df_main.empty:
         anio_c = st.selectbox("Año", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True), key="sc")
         df_c = df_main[df_main['invoice_date'].dt.year == anio_c]
-        
         c1, c2, c3 = st.columns(3)
         with c1: st.plotly_chart(config_plotly(px.pie(df_c.groupby('Provincia')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Provincia')), use_container_width=True)
         with c2: st.plotly_chart(config_plotly(px.pie(df_c.groupby('Zona_Comercial')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Zona_Comercial')), use_container_width=True)
         with c3: st.plotly_chart(config_plotly(px.pie(df_c.groupby('Categoria_Cliente')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Categoria_Cliente')), use_container_width=True)
-        
         st.divider()
         df_old = df_main[df_main['invoice_date'].dt.year == (anio_c - 1)]
         cli_now = set(df_c['Cliente'])
         cli_old = set(df_old['Cliente'])
         nuevos = list(cli_now - cli_old)
         perdidos = list(cli_old - cli_now)
-        
         k1, k2, k3, k4 = st.columns(4)
         with k1: card_kpi("Activos", len(cli_now), "border-blue", formato="numero")
         with k2: card_kpi("Nuevos", len(nuevos), "border-green", formato="numero")
         with k3: card_kpi("Churn", len(perdidos), "border-red", formato="numero")
         with k4: card_kpi("Retención", f"{len(cli_old.intersection(cli_now))/len(cli_old)*100:.1f}%" if cli_old else "100%", "border-purple", formato="raw")
-
         c_top, c_lost = st.columns(2)
         with c_top:
             st.subheader("Top Clientes")
@@ -753,17 +693,13 @@ with tab_vend:
         c1, c2 = st.columns(2)
         with c1: anio_v = st.selectbox("Año", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True), key="sv")
         with c2: vend = st.selectbox("Vendedor", sorted(df_main['Vendedor'].unique()))
-        
         df_v = df_main[(df_main['invoice_date'].dt.year == anio_v) & (df_main['Vendedor'] == vend)]
         df_v_old = df_main[(df_main['invoice_date'].dt.year == (anio_v-1)) & (df_main['Vendedor'] == vend)]
-        
         perdidos_v = list(set(df_v_old['Cliente']) - set(df_v['Cliente']))
-        
         k1, k2, k3 = st.columns(3)
         with k1: card_kpi("Venta", df_v['Venta_Neta'].sum(), "border-green")
         with k2: card_kpi("Clientes", df_v['Cliente'].nunique(), "border-blue", formato="numero")
         with k3: card_kpi("Riesgo", len(perdidos_v), "border-red", formato="numero")
-        
         c_v1, c_v2 = st.columns(2)
         with c_v1:
             st.subheader("Mejores Clientes")
@@ -780,18 +716,15 @@ with tab_vend:
 with tab_det:
     if not df_main.empty:
         cli = st.selectbox("Buscar Cliente:", sorted(df_main['Cliente'].unique()), index=None, placeholder="Escriba para buscar...")
-        
         if cli:
             df_cl = df_main[df_main['Cliente'] == cli]
             ultima = df_cl['invoice_date'].max()
             dias = (datetime.now() - ultima).days
-            
             k1, k2, k3, k4 = st.columns(4)
             with k1: card_kpi("Total Histórico", df_cl['Venta_Neta'].sum(), "border-green")
             with k2: card_kpi("Última Compra", ultima.strftime('%d-%m-%Y'), "border-blue", formato="raw")
             with k3: card_kpi("Días Inactivo", dias, "border-red" if dias>90 else "border-gray", formato="numero")
             with k4: card_kpi("Ubicación", df_cl.iloc[0]['Provincia'], "border-purple", formato="raw")
-            
             c_h, c_p = st.columns(2)
             with c_h:
                 st.subheader("Historial")
