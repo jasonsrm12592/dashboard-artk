@@ -683,50 +683,59 @@ with tab_renta:
             with t3: st.dataframe(df_f, use_container_width=True)
             with t4: st.dataframe(df_fe, use_container_width=True)
 
-# === OTRAS PESTAÑAS (Resumidas) ===
+# === PESTAÑA 3: PRODUCTOS (ACTUALIZADA CON FILTRO GLOBAL) ===
 with tab_prod:
     df_cat = cargar_inventario_general()
     if not df_prod.empty:
-        c1, c2 = st.columns([1,3])
-        with c1: anio = st.selectbox("Año", sorted(df_prod['date'].dt.year.unique(), reverse=True))
-        df_p = df_prod[df_prod['date'].dt.year == anio].merge(df_cat[['ID_Producto','Tipo']], on='ID_Producto', how='left').fillna({'Tipo':'Otro'})
-        c_m1, c_m2 = st.columns([1,2])
-        with c_m1: st.plotly_chart(config_plotly(px.pie(df_p.groupby('Tipo')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Tipo')), use_container_width=True)
-        with c_m2: st.plotly_chart(config_plotly(px.bar(df_p.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index(), x='Venta_Neta', y='Producto', orientation='h')), use_container_width=True)
-
-# --- NUEVO: VENTAS POR CATEGORÍA DE CLIENTE ---
-        st.divider()
-        st.subheader("🛍️ Qué compran más (por Categoría de Cliente)")
+        # --- 1. FILTROS GENERALES ---
+        c_f1, c_f2 = st.columns([1, 4])
+        with c_f1: 
+            anio = st.selectbox("📅 Año", sorted(df_prod['date'].dt.year.unique(), reverse=True))
+        with c_f2: 
+            # Selector de métrica (Monto o Cantidad)
+            tipo_ver = st.radio("📊 Ver Gráficos por:", ["Monto (₡)", "Cantidad (Und)"], index=0, horizontal=True)
         
-        # Cruzamos df_p (productos del año seleccionado) con df_main para obtener la categoría
-        if not df_p.empty and not df_main.empty:
-            # Hacemos merge usando el ID de factura para traer la categoría del cliente
+        # Definir qué columna usar según la selección
+        col_metrica = 'Venta_Neta' if "Monto" in tipo_ver else 'quantity'
+        
+        # Filtrar datos base
+        df_p = df_prod[df_prod['date'].dt.year == anio].merge(df_cat[['ID_Producto','Tipo']], on='ID_Producto', how='left').fillna({'Tipo':'Otro'})
+        
+        # --- 2. GRÁFICOS SUPERIORES ---
+        c_m1, c_m2 = st.columns([1, 2])
+        
+        # Gráfico Pie (Mix por Tipo)
+        grp_tipo = df_p.groupby('Tipo')[col_metrica].sum().reset_index()
+        with c_m1: 
+            st.plotly_chart(config_plotly(px.pie(grp_tipo, values=col_metrica, names='Tipo', title=f"Mix por Tipo ({tipo_ver})")), use_container_width=True)
+        
+        # Gráfico Barras (Top 10 Global)
+        grp_top = df_p.groupby('Producto')[col_metrica].sum().sort_values().tail(10).reset_index()
+        with c_m2: 
+            st.plotly_chart(config_plotly(px.bar(grp_top, x=col_metrica, y='Producto', orientation='h', text_auto='.2s', title=f"Top 10 Global ({tipo_ver})")), use_container_width=True)
+
+        # --- 3. SECCIÓN CATEGORÍA DE CLIENTE (Dinámica) ---
+        st.divider()
+        st.subheader(f"🛍️ Detalle por Categoría de Cliente ({tipo_ver})")
+        
+        if not df_main.empty:
             df_prod_cat = pd.merge(df_p, df_main[['id', 'Categoria_Cliente']], left_on='ID_Factura', right_on='id', how='left')
-            
-            # Llenamos vacíos
             df_prod_cat['Categoria_Cliente'] = df_prod_cat['Categoria_Cliente'].fillna("Sin Categoría")
             
-            # Selector de Categoría
-            categorias_disponibles = sorted(df_prod_cat['Categoria_Cliente'].unique())
-            col_sel, _ = st.columns([1, 3])
-            with col_sel:
-                cat_seleccionada = st.selectbox("Filtrar por Categoría:", categorias_disponibles)
+            cats = sorted(df_prod_cat['Categoria_Cliente'].unique())
+            c_sel, _ = st.columns([1,3])
+            with c_sel: cat_sel = st.selectbox("Filtrar Categoría:", cats)
             
-            # Filtrar datos y agrupar
-            df_cat_filter = df_prod_cat[df_prod_cat['Categoria_Cliente'] == cat_seleccionada]
+            df_cf = df_prod_cat[df_prod_cat['Categoria_Cliente'] == cat_sel]
             
-            if not df_cat_filter.empty:
-                top_prod_cat = df_cat_filter.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
-                
-                # Graficar
-                fig_cat = px.bar(top_prod_cat, x='Venta_Neta', y='Producto', orientation='h', 
-                                 text_auto='.2s', 
-                                 title=f"Top 10 Productos: {cat_seleccionada}",
-                                 color_discrete_sequence=['#8e44ad']) # Morado
-                fig_cat.update_layout(yaxis={'categoryorder':'total ascending'})
+            if not df_cf.empty:
+                top_cat = df_cf.groupby('Producto')[col_metrica].sum().sort_values().tail(10).reset_index()
+                fig_cat = px.bar(top_cat, x=col_metrica, y='Producto', orientation='h', text_auto='.2s', 
+                                 title=f"Lo más vendido en: {cat_sel}",
+                                 color_discrete_sequence=['#8e44ad'])
                 st.plotly_chart(config_plotly(fig_cat), use_container_width=True)
             else:
-                st.warning(f"No hay ventas registradas para la categoría '{cat_seleccionada}' en el año {anio}.")
+                st.info(f"No hay movimientos para '{cat_sel}' con los filtros actuales.")
 
 # === PESTAÑA 4: BAJA ROTACIÓN ===
 with tab_inv:
@@ -839,6 +848,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
