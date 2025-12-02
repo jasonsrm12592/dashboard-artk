@@ -726,7 +726,7 @@ with tab_prod:
                              height=300)
             
             # Opcional: Ajustar márgenes para que no quede mucho espacio blanco
-            fig_pie.update_layout(margin=dict(t=30, b=10, l=10, r=10))
+            fig_pie.update_layout(margin=dict(t=60, b=10, l=10, r=10))
             
             st.plotly_chart(config_plotly(fig_pie), use_container_width=True)
         
@@ -891,6 +891,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
