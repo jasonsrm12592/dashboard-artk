@@ -694,6 +694,40 @@ with tab_prod:
         with c_m1: st.plotly_chart(config_plotly(px.pie(df_p.groupby('Tipo')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Tipo')), use_container_width=True)
         with c_m2: st.plotly_chart(config_plotly(px.bar(df_p.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index(), x='Venta_Neta', y='Producto', orientation='h')), use_container_width=True)
 
+# --- NUEVO: VENTAS POR CATEGORÍA DE CLIENTE ---
+        st.divider()
+        st.subheader("🛍️ Qué compran más (por Categoría de Cliente)")
+        
+        # Cruzamos df_p (productos del año seleccionado) con df_main para obtener la categoría
+        if not df_p.empty and not df_main.empty:
+            # Hacemos merge usando el ID de factura para traer la categoría del cliente
+            df_prod_cat = pd.merge(df_p, df_main[['id', 'Categoria_Cliente']], left_on='ID_Factura', right_on='id', how='left')
+            
+            # Llenamos vacíos
+            df_prod_cat['Categoria_Cliente'] = df_prod_cat['Categoria_Cliente'].fillna("Sin Categoría")
+            
+            # Selector de Categoría
+            categorias_disponibles = sorted(df_prod_cat['Categoria_Cliente'].unique())
+            col_sel, _ = st.columns([1, 3])
+            with col_sel:
+                cat_seleccionada = st.selectbox("Filtrar por Categoría:", categorias_disponibles)
+            
+            # Filtrar datos y agrupar
+            df_cat_filter = df_prod_cat[df_prod_cat['Categoria_Cliente'] == cat_seleccionada]
+            
+            if not df_cat_filter.empty:
+                top_prod_cat = df_cat_filter.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
+                
+                # Graficar
+                fig_cat = px.bar(top_prod_cat, x='Venta_Neta', y='Producto', orientation='h', 
+                                 text_auto='.2s', 
+                                 title=f"Top 10 Productos: {cat_seleccionada}",
+                                 color_discrete_sequence=['#8e44ad']) # Morado
+                fig_cat.update_layout(yaxis={'categoryorder':'total ascending'})
+                st.plotly_chart(config_plotly(fig_cat), use_container_width=True)
+            else:
+                st.warning(f"No hay ventas registradas para la categoría '{cat_seleccionada}' en el año {anio}.")
+
 # === PESTAÑA 4: BAJA ROTACIÓN ===
 with tab_inv:
     if st.button("🔄 Calcular Rotación"):
@@ -805,6 +839,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
