@@ -683,7 +683,7 @@ with tab_renta:
             with t3: st.dataframe(df_f, use_container_width=True)
             with t4: st.dataframe(df_fe, use_container_width=True)
 
-# === PESTAÑA 3: PRODUCTOS (ACTUALIZADA CON FRECUENCIA DE VENTA) ===
+# === PESTAÑA 3: PRODUCTOS (ACTUALIZADA: Métrica + Categoría + Zona) ===
 with tab_prod:
     df_cat = cargar_inventario_general()
     if not df_prod.empty:
@@ -692,45 +692,85 @@ with tab_prod:
         with c_f1: 
             anio = st.selectbox("📅 Año", sorted(df_prod['date'].dt.year.unique(), reverse=True))
         with c_f2: 
-            # Selector de métrica: Ahora incluye "Freq. Facturas"
+            # Selector de métrica (Afecta a TODOS los gráficos)
             tipo_ver = st.radio("📊 Ver Gráficos por:", 
                                 ["Monto (₡)", "Cantidad (Und)", "Freq. Facturas (# Docs)"], 
                                 index=0, horizontal=True)
         
-        # --- CONFIGURACIÓN DINÁMICA SEGÚN SELECCIÓN ---
+        # --- CONFIGURACIÓN DINÁMICA ---
         if "Monto" in tipo_ver:
             col_calc = 'Venta_Neta'
             agg_func = 'sum'
-            fmt_text = '.2s' # Formato monetario resumido
+            fmt_text = '.2s'
         elif "Cantidad" in tipo_ver:
             col_calc = 'quantity'
             agg_func = 'sum'
-            fmt_text = '.2s' # Formato numérico
+            fmt_text = '.2s'
         else:
-            # Opción Frecuencia: Contar facturas ÚNICAS donde aparece el producto
             col_calc = 'ID_Factura'
-            agg_func = 'nunique' 
-            fmt_text = '' # Entero simple
+            agg_func = 'nunique' # Conteo único de facturas
+            fmt_text = ''
         
         # Filtrar datos base por año
         df_p = df_prod[df_prod['date'].dt.year == anio].merge(df_cat[['ID_Producto','Tipo']], on='ID_Producto', how='left').fillna({'Tipo':'Otro'})
         
-        # --- 2. GRÁFICOS SUPERIORES ---
+        # --- 2. GRÁFICOS GLOBALES ---
         c_m1, c_m2 = st.columns([1, 2])
         
-        # Gráfico Pie (Mix por Tipo)
+        # Mix por Tipo
         grp_tipo = df_p.groupby('Tipo')[col_calc].agg(agg_func).reset_index()
         with c_m1: 
             st.plotly_chart(config_plotly(px.pie(grp_tipo, values=col_calc, names='Tipo', title=f"Mix por Tipo ({tipo_ver})")), use_container_width=True)
         
-        # Gráfico Barras (Top 10 Global)
-        # Aquí usamos la función de agregación dinámica (Suma o Conteo único)
+        # Top 10 Global
         grp_top = df_p.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
-        
         with c_m2: 
-            st.plotly_chart(config_plotly(px.bar(grp_top, x=col_calc, y='Producto', orientation='h', 
-                                                 text_auto=fmt_text, 
-                                                 title=f"Top 10 Global ({tipo_ver})")), use_container_width=True)
+            st.plotly_chart(config_plotly(px.bar(grp_top, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, title=f"Top 10 Global ({tipo_ver})")), use_container_width=True)
+
+        # --- PREPARACIÓN DE DATOS DETALLADOS ---
+        if not df_main.empty:
+            # Cruzamos productos con clientes para traer Categoría y Zona de una sola vez
+            df_merged = pd.merge(df_p, df_main[['id', 'Categoria_Cliente', 'Zona_Comercial']], left_on='ID_Factura', right_on='id', how='left')
+            df_merged['Categoria_Cliente'] = df_merged['Categoria_Cliente'].fillna("Sin Categoría")
+            df_merged['Zona_Comercial'] = df_merged['Zona_Comercial'].fillna("Sin Zona")
+
+            st.divider()
+            
+            # --- 3. POR CATEGORÍA DE CLIENTE ---
+            c_cat1, c_cat2 = st.columns([1, 3])
+            with c_cat1: 
+                st.subheader(f"🛍️ Por Categoría")
+                cats = sorted(df_merged['Categoria_Cliente'].unique())
+                cat_sel = st.selectbox("Filtrar Categoría:", cats)
+            
+            with c_cat2:
+                df_cf = df_merged[df_merged['Categoria_Cliente'] == cat_sel]
+                if not df_cf.empty:
+                    top_cat = df_cf.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
+                    fig_cat = px.bar(top_cat, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
+                                     title=f"Top Productos: {cat_sel}", color_discrete_sequence=['#8e44ad']) # Morado
+                    st.plotly_chart(config_plotly(fig_cat), use_container_width=True)
+                else:
+                    st.info("Sin datos.")
+
+            st.divider()
+
+            # --- 4. POR ZONA COMERCIAL (NUEVO) ---
+            c_zon1, c_zon2 = st.columns([1, 3])
+            with c_zon1: 
+                st.subheader(f"🌍 Por Zona")
+                zonas = sorted(df_merged['Zona_Comercial'].unique())
+                zona_sel = st.selectbox("Filtrar Zona:", zonas)
+            
+            with c_zon2:
+                df_zf = df_merged[df_merged['Zona_Comercial'] == zona_sel]
+                if not df_zf.empty:
+                    top_zona = df_zf.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
+                    fig_zona = px.bar(top_zona, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
+                                     title=f"Top Productos: {zona_sel}", color_discrete_sequence=['#16a085']) # Teal/Verde
+                    st.plotly_chart(config_plotly(fig_zona), use_container_width=True)
+                else:
+                    st.info("Sin datos.")
 
         # --- 3. SECCIÓN CATEGORÍA DE CLIENTE ---
         st.divider()
@@ -870,6 +910,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
