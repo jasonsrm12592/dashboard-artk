@@ -448,7 +448,8 @@ with st.expander("⚙️ Configuración", expanded=True):
     with col_conf1: tc_usd = st.number_input("TC (USD -> CRC)", value=515)
     with col_conf2: st.info(f"TC: ₡{tc_usd}")
 
-tab_kpis, tab_renta, tab_prod, tab_inv, tab_cx, tab_cli, tab_vend, tab_det = st.tabs(["📊 Visión General", "📈 Rentabilidad Proyectos", "📦 Productos", "🕸️ Baja Rotación", "💰 Cartera", "👥 Segmentación", "💼 Vendedores", "🔍 Radiografía"])
+# SE AGREGÓ 'tab_down' AL FINAL
+tab_kpis, tab_renta, tab_prod, tab_inv, tab_cx, tab_cli, tab_vend, tab_det, tab_down = st.tabs(["📊 Visión General", "📈 Rentabilidad Proyectos", "📦 Productos", "🕸️ Baja Rotación", "💰 Cartera", "👥 Segmentación", "💼 Vendedores", "🔍 Radiografía", "📥 Descargas"])
 
 with st.spinner('Cargando...'):
     df_main = cargar_datos_generales()
@@ -907,6 +908,94 @@ with tab_det:
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
 
+# === PESTAÑA 9: CENTRO DE DESCARGAS ===
+with tab_down:
+    st.header("📥 Centro de Descargas")
+    st.markdown("Descargue aquí los datos utilizados para generar los gráficos del dashboard.")
+    
+    col_d1, col_d2 = st.columns(2)
+    
+    # --- SECCIÓN 1: VENTAS Y GENERAL ---
+    with col_d1:
+        st.subheader("📊 Ventas y Visión General")
+        
+        # 1. Ventas Generales (Todas)
+        if not df_main.empty:
+            buffer_main = convert_df_to_excel(df_main[['invoice_date', 'name', 'Cliente', 'Vendedor', 'Venta_Neta', 'Provincia', 'Zona_Comercial', 'Categoria_Cliente']], "Ventas_General")
+            st.download_button("📥 Ventas Históricas (Detalle Facturas)", data=buffer_main, file_name="Ventas_Generales.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        
+        # 2. Ventas Semana Actual (Recalculado)
+        hoy = datetime.now()
+        start_week = hoy - timedelta(days=hoy.weekday())
+        end_week = start_week + timedelta(days=6)
+        if not df_main.empty:
+            mask_week = (df_main['invoice_date'].dt.date >= start_week.date()) & (df_main['invoice_date'].dt.date <= end_week.date())
+            df_week_dl = df_main[mask_week][['invoice_date', 'name', 'Cliente', 'Venta_Neta']].copy()
+            if not df_week_dl.empty:
+                st.download_button(f"📥 Ventas Semana Actual ({start_week.strftime('%d/%m')})", 
+                                   data=convert_df_to_excel(df_week_dl), file_name=f"Ventas_Semana_{start_week.strftime('%d-%m')}.xlsx")
+            else:
+                st.warning("No hay ventas esta semana para descargar.")
+
+        # 3. Mix por Plan (Analítico)
+        if not df_prod.empty and not df_an.empty:
+             # Reutilizamos lógica de mapeo simple para descarga
+            mapa_dl = dict(zip(df_an['id_cuenta_analitica'].astype(str), df_an['Plan_Nombre']))
+            def get_plan(d):
+                try: return mapa_dl.get(str(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0]), "Otro")
+                except: return "Retail/Otro"
+            
+            df_mix_dl = df_prod.copy()
+            df_mix_dl['Plan'] = df_mix_dl['analytic_distribution'].apply(get_plan)
+            grp_mix = df_mix_dl.groupby(['Plan', df_mix_dl['date'].dt.year])['Venta_Neta'].sum().reset_index().rename(columns={'date':'Año'})
+            st.download_button("📥 Mix por Plan (Resumen Anual)", data=convert_df_to_excel(grp_mix), file_name="Mix_Ventas_Plan.xlsx")
+
+    # --- SECCIÓN 2: PRODUCTOS E INVENTARIO ---
+    with col_d2:
+        st.subheader("📦 Productos e Inventario")
+        
+        # 4. Detalle de Productos
+        if not df_prod.empty:
+            # Preparamos un DF limpio
+            df_p_clean = df_prod[['date', 'ID_Factura', 'Producto', 'quantity', 'Venta_Neta']].copy()
+            st.download_button("📥 Movimientos de Productos (Todos)", data=convert_df_to_excel(df_p_clean), file_name="Detalle_Productos.xlsx")
+        
+        # 5. Inventario Baja Rotación
+        if st.button("🔄 Generar Reporte Baja Rotación (Reciente)"):
+            with st.spinner("Procesando inventario..."):
+                df_inv_dl, status_inv = cargar_inventario_baja_rotacion()
+                if not df_inv_dl.empty:
+                    st.download_button("📥 Descargar Baja Rotación", 
+                                       data=convert_df_to_excel(df_inv_dl), 
+                                       file_name="Inventario_Baja_Rotacion.xlsx")
+                else:
+                    st.error(f"No se pudo generar: {status_inv}")
+
+    st.divider()
+    
+    col_d3, col_d4 = st.columns(2)
+    
+    # --- SECCIÓN 3: COMERCIAL Y CARTERA ---
+    with col_d3:
+        st.subheader("💰 Cartera y Clientes")
+        
+        # 6. Cartera (Cuentas por Cobrar)
+        df_cx_dl = cargar_cartera()
+        if not df_cx_dl.empty:
+            st.download_button("📥 Reporte de Cartera (CXC)", data=convert_df_to_excel(df_cx_dl), file_name="Reporte_Cartera.xlsx")
+            
+        # 7. Segmentación (Resumen)
+        if not df_main.empty:
+            grp_seg = df_main.groupby(['Categoria_Cliente', 'Zona_Comercial'])['Venta_Neta'].sum().reset_index()
+            st.download_button("📥 Ventas por Segmento/Zona", data=convert_df_to_excel(grp_seg), file_name="Ventas_Segmentacion.xlsx")
+
+    with col_d4:
+        st.subheader("👤 Vendedores")
+        
+        # 8. Desempeño Vendedores
+        if not df_main.empty:
+            grp_vend = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index().rename(columns={'invoice_date':'Año'})
+            st.download_button("📥 Ventas por Vendedor (Anual)", data=convert_df_to_excel(grp_vend), file_name="Performance_Vendedores.xlsx")
 
 
 
