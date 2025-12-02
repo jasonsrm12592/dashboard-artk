@@ -772,33 +772,6 @@ with tab_prod:
                 else:
                     st.info("Sin datos.")
 
-        # --- 3. SECCIÓN CATEGORÍA DE CLIENTE ---
-        st.divider()
-        st.subheader(f"🛍️ Detalle por Categoría de Cliente ({tipo_ver})")
-        
-        if not df_main.empty:
-            # Cruzamos productos con la info del cliente (para saber su categoría)
-            df_prod_cat = pd.merge(df_p, df_main[['id', 'Categoria_Cliente']], left_on='ID_Factura', right_on='id', how='left')
-            df_prod_cat['Categoria_Cliente'] = df_prod_cat['Categoria_Cliente'].fillna("Sin Categoría")
-            
-            cats = sorted(df_prod_cat['Categoria_Cliente'].unique())
-            c_sel, _ = st.columns([1,3])
-            with c_sel: cat_sel = st.selectbox("Filtrar Categoría:", cats)
-            
-            df_cf = df_prod_cat[df_prod_cat['Categoria_Cliente'] == cat_sel]
-            
-            if not df_cf.empty:
-                # Top por categoría usando la métrica seleccionada
-                top_cat = df_cf.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
-                
-                fig_cat = px.bar(top_cat, x=col_calc, y='Producto', orientation='h', 
-                                 text_auto=fmt_text, 
-                                 title=f"Lo más 'popular' en: {cat_sel}" if "Freq" in tipo_ver else f"Lo más vendido en: {cat_sel}",
-                                 color_discrete_sequence=['#8e44ad'])
-                st.plotly_chart(config_plotly(fig_cat), use_container_width=True)
-            else:
-                st.info(f"No hay movimientos para '{cat_sel}' con los filtros actuales.")
-
 # === PESTAÑA 4: BAJA ROTACIÓN ===
 with tab_inv:
     if st.button("🔄 Calcular Rotación"):
@@ -910,6 +883,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
