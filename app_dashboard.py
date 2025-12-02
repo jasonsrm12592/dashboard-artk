@@ -683,7 +683,7 @@ with tab_renta:
             with t3: st.dataframe(df_f, use_container_width=True)
             with t4: st.dataframe(df_fe, use_container_width=True)
 
-# === PESTAÑA 3: PRODUCTOS (ACTUALIZADA CON FILTRO GLOBAL) ===
+# === PESTAÑA 3: PRODUCTOS (ACTUALIZADA CON FRECUENCIA DE VENTA) ===
 with tab_prod:
     df_cat = cargar_inventario_general()
     if not df_prod.empty:
@@ -692,33 +692,52 @@ with tab_prod:
         with c_f1: 
             anio = st.selectbox("📅 Año", sorted(df_prod['date'].dt.year.unique(), reverse=True))
         with c_f2: 
-            # Selector de métrica (Monto o Cantidad)
-            tipo_ver = st.radio("📊 Ver Gráficos por:", ["Monto (₡)", "Cantidad (Und)"], index=0, horizontal=True)
+            # Selector de métrica: Ahora incluye "Freq. Facturas"
+            tipo_ver = st.radio("📊 Ver Gráficos por:", 
+                                ["Monto (₡)", "Cantidad (Und)", "Freq. Facturas (# Docs)"], 
+                                index=0, horizontal=True)
         
-        # Definir qué columna usar según la selección
-        col_metrica = 'Venta_Neta' if "Monto" in tipo_ver else 'quantity'
+        # --- CONFIGURACIÓN DINÁMICA SEGÚN SELECCIÓN ---
+        if "Monto" in tipo_ver:
+            col_calc = 'Venta_Neta'
+            agg_func = 'sum'
+            fmt_text = '.2s' # Formato monetario resumido
+        elif "Cantidad" in tipo_ver:
+            col_calc = 'quantity'
+            agg_func = 'sum'
+            fmt_text = '.2s' # Formato numérico
+        else:
+            # Opción Frecuencia: Contar facturas ÚNICAS donde aparece el producto
+            col_calc = 'ID_Factura'
+            agg_func = 'nunique' 
+            fmt_text = '' # Entero simple
         
-        # Filtrar datos base
+        # Filtrar datos base por año
         df_p = df_prod[df_prod['date'].dt.year == anio].merge(df_cat[['ID_Producto','Tipo']], on='ID_Producto', how='left').fillna({'Tipo':'Otro'})
         
         # --- 2. GRÁFICOS SUPERIORES ---
         c_m1, c_m2 = st.columns([1, 2])
         
         # Gráfico Pie (Mix por Tipo)
-        grp_tipo = df_p.groupby('Tipo')[col_metrica].sum().reset_index()
+        grp_tipo = df_p.groupby('Tipo')[col_calc].agg(agg_func).reset_index()
         with c_m1: 
-            st.plotly_chart(config_plotly(px.pie(grp_tipo, values=col_metrica, names='Tipo', title=f"Mix por Tipo ({tipo_ver})")), use_container_width=True)
+            st.plotly_chart(config_plotly(px.pie(grp_tipo, values=col_calc, names='Tipo', title=f"Mix por Tipo ({tipo_ver})")), use_container_width=True)
         
         # Gráfico Barras (Top 10 Global)
-        grp_top = df_p.groupby('Producto')[col_metrica].sum().sort_values().tail(10).reset_index()
+        # Aquí usamos la función de agregación dinámica (Suma o Conteo único)
+        grp_top = df_p.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
+        
         with c_m2: 
-            st.plotly_chart(config_plotly(px.bar(grp_top, x=col_metrica, y='Producto', orientation='h', text_auto='.2s', title=f"Top 10 Global ({tipo_ver})")), use_container_width=True)
+            st.plotly_chart(config_plotly(px.bar(grp_top, x=col_calc, y='Producto', orientation='h', 
+                                                 text_auto=fmt_text, 
+                                                 title=f"Top 10 Global ({tipo_ver})")), use_container_width=True)
 
-        # --- 3. SECCIÓN CATEGORÍA DE CLIENTE (Dinámica) ---
+        # --- 3. SECCIÓN CATEGORÍA DE CLIENTE ---
         st.divider()
         st.subheader(f"🛍️ Detalle por Categoría de Cliente ({tipo_ver})")
         
         if not df_main.empty:
+            # Cruzamos productos con la info del cliente (para saber su categoría)
             df_prod_cat = pd.merge(df_p, df_main[['id', 'Categoria_Cliente']], left_on='ID_Factura', right_on='id', how='left')
             df_prod_cat['Categoria_Cliente'] = df_prod_cat['Categoria_Cliente'].fillna("Sin Categoría")
             
@@ -729,9 +748,12 @@ with tab_prod:
             df_cf = df_prod_cat[df_prod_cat['Categoria_Cliente'] == cat_sel]
             
             if not df_cf.empty:
-                top_cat = df_cf.groupby('Producto')[col_metrica].sum().sort_values().tail(10).reset_index()
-                fig_cat = px.bar(top_cat, x=col_metrica, y='Producto', orientation='h', text_auto='.2s', 
-                                 title=f"Lo más vendido en: {cat_sel}",
+                # Top por categoría usando la métrica seleccionada
+                top_cat = df_cf.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
+                
+                fig_cat = px.bar(top_cat, x=col_calc, y='Producto', orientation='h', 
+                                 text_auto=fmt_text, 
+                                 title=f"Lo más 'popular' en: {cat_sel}" if "Freq" in tipo_ver else f"Lo más vendido en: {cat_sel}",
                                  color_discrete_sequence=['#8e44ad'])
                 st.plotly_chart(config_plotly(fig_cat), use_container_width=True)
             else:
@@ -848,6 +870,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
