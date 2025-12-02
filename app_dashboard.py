@@ -554,12 +554,27 @@ with tab_kpis:
                     except: return "Otro"
                 df_l['Plan'] = df_l['analytic_distribution'].apply(clasif)
                 
-                # --- CORRECCION AQUI: Agrupar por Mes Numérico y Nombre para ordenar bien ---
                 df_l['Mes_Num'] = df_l['date'].dt.month
                 df_l['Mes_Nom'] = df_l['date'].dt.strftime('%m-%b')
                 
                 df_grp = df_l.groupby(['Mes_Num', 'Mes_Nom', 'Plan'])['Venta_Neta'].sum().reset_index().sort_values('Mes_Num')
-                st.plotly_chart(config_plotly(px.bar(df_grp, x='Mes_Nom', y='Venta_Neta', color='Plan', title="")), use_container_width=True)
+                
+                # --- NUEVO: Cálculo de % por mes ---
+                # 1. Calcular el total vendido por mes para usarlo de base (100%)
+                df_grp['Total_Mes'] = df_grp.groupby('Mes_Num')['Venta_Neta'].transform('sum')
+                
+                # 2. Calcular el porcentaje formateado (ej. 25.4%)
+                df_grp['Pct_Texto'] = df_grp.apply(lambda x: f"{x['Venta_Neta']/x['Total_Mes']:.1%}" if x['Total_Mes'] != 0 else "0%", axis=1)
+                
+                # 3. Crear gráfico incluyendo el texto
+                fig_mix = px.bar(df_grp, x='Mes_Nom', y='Venta_Neta', color='Plan', 
+                                 text='Pct_Texto',  # Aquí asignamos el porcentaje como texto
+                                 title="")
+                
+                # 4. Ajustar para que el texto se vea bien dentro de la barra
+                fig_mix.update_traces(textposition='inside', textfont_size=10)
+                
+                st.plotly_chart(config_plotly(fig_mix), use_container_width=True)
        
         with c_top:
             st.subheader("🏆 Top Vendedores")
@@ -790,6 +805,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
