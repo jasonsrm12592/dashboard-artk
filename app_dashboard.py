@@ -718,7 +718,7 @@ with tab_prod:
         c_m1, c_m2 = st.columns([1, 2])
         
         # Mix por Tipo
-       grp_tipo = df_p.groupby('Tipo')[col_calc].agg(agg_func).reset_index()
+        grp_tipo = df_p.groupby('Tipo')[col_calc].agg(agg_func).reset_index()
         with c_m1: 
             # Agregamos 'height=300' para hacerlo más pequeño
             fig_pie = px.pie(grp_tipo, values=col_calc, names='Tipo', 
@@ -891,6 +891,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
