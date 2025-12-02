@@ -509,6 +509,37 @@ with tab_kpis:
         fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Actual'], name=f'{anio_sel}', marker_color='#2980b9'))
         fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Anterior'], name=f'{anio_sel-1}', marker_color='#95a5a6'))
         st.plotly_chart(config_plotly(fig_c), use_container_width=True)
+
+# --- NUEVO: GRÁFICO VENTAS SEMANA ACTUAL ---
+        st.divider()
+        st.markdown("### 📅 Ventas Semana Actual")
+        
+        hoy = datetime.now()
+        # Calcular lunes (0) y domingo (6) de la semana actual
+        inicio_semana = hoy - timedelta(days=hoy.weekday())
+        fin_semana = inicio_semana + timedelta(days=6)
+        
+        # Filtrar datos de la semana actual
+        mask_semana = (df_main['invoice_date'].dt.date >= inicio_semana.date()) & \
+                      (df_main['invoice_date'].dt.date <= fin_semana.date())
+        df_semana = df_main[mask_semana].copy()
+        
+        if not df_semana.empty:
+            # Mapeo manual para asegurar nombres en español
+            df_semana['Dia_Num'] = df_semana['invoice_date'].dt.weekday
+            mapa_dias = {0: 'Lunes', 1: 'Martes', 2: 'Miércoles', 3: 'Jueves', 4: 'Viernes', 5: 'Sábado', 6: 'Domingo'}
+            df_semana['Dia_Nom'] = df_semana['Dia_Num'].map(mapa_dias)
+            
+            # Agrupar y ordenar
+            v_semana = df_semana.groupby(['Dia_Num', 'Dia_Nom'])['Venta_Neta'].sum().reset_index().sort_values('Dia_Num')
+            
+            # Crear gráfico
+            fig_w = px.bar(v_semana, x='Dia_Nom', y='Venta_Neta', text_auto='.2s', 
+                           title=f"Semana del {inicio_semana.strftime('%d/%m')} al {fin_semana.strftime('%d/%m')}")
+            fig_w.update_traces(marker_color='#1abc9c') # Color cian para diferenciar
+            st.plotly_chart(config_plotly(fig_w), use_container_width=True)
+        else:
+            st.info(f"💤 No hay ventas registradas aún en la semana del {inicio_semana.strftime('%d/%m')}.")
         
         st.divider()
         c_mix, c_top = st.columns(2)
@@ -759,6 +790,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
