@@ -727,7 +727,7 @@ with tab_prod:
             # Ajustes de diseño:
             fig_pie.update_layout(
                 # title_pad: Agrega espacio (b=bottom) debajo del título
-                title_pad=dict(b=20), 
+                title_pad=dict(b=50), 
                 # margin: Aumentamos el margen superior (t=top) para que quepa el título más separado
                 margin=dict(t=50, b=10, l=10, r=10)
             )
@@ -895,6 +895,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
