@@ -683,19 +683,19 @@ with tab_renta:
             with t3: st.dataframe(df_f, use_container_width=True)
             with t4: st.dataframe(df_fe, use_container_width=True)
 
-# === PESTAÑA 3: PRODUCTOS (ACTUALIZADA: Métrica + Categoría + Zona) ===
+# === PESTAÑA 3: PRODUCTOS (ACTUALIZADA: Métrica + Cat + Zona + Vendedor) ===
 with tab_prod:
     df_cat = cargar_inventario_general()
     if not df_prod.empty:
         # --- 1. FILTROS GENERALES ---
         c_f1, c_f2 = st.columns([1, 4])
         with c_f1: 
-            anio = st.selectbox("📅 Año", sorted(df_prod['date'].dt.year.unique(), reverse=True))
+            anio = st.selectbox("📅 Año", sorted(df_prod['date'].dt.year.unique(), reverse=True), key="prod_anio_sel")
         with c_f2: 
             # Selector de métrica (Afecta a TODOS los gráficos)
             tipo_ver = st.radio("📊 Ver Gráficos por:", 
                                 ["Monto (₡)", "Cantidad (Und)", "Freq. Facturas (# Docs)"], 
-                                index=0, horizontal=True)
+                                index=0, horizontal=True, key="prod_metric_sel")
         
         # --- CONFIGURACIÓN DINÁMICA ---
         if "Monto" in tipo_ver:
@@ -717,21 +717,13 @@ with tab_prod:
         # --- 2. GRÁFICOS GLOBALES ---
         c_m1, c_m2 = st.columns([1, 2])
         
-        # Mix por Tipo
+        # Mix por Tipo (Con altura ajustada y padding)
         grp_tipo = df_p.groupby('Tipo')[col_calc].agg(agg_func).reset_index()
         with c_m1: 
             fig_pie = px.pie(grp_tipo, values=col_calc, names='Tipo', 
                              title=f"Mix por Tipo ({tipo_ver})", 
-                             height=400)
-            
-            # Ajustes de diseño:
-            fig_pie.update_layout(
-                # title_pad: Agrega espacio (b=bottom) debajo del título
-                title_pad=dict(b=200), 
-                # margin: Aumentamos el margen superior (t=top) para que quepa el título más separado
-                margin=dict(t=50, b=10, l=10, r=10)
-            )
-            
+                             height=300)
+            fig_pie.update_layout(title_pad=dict(b=20), margin=dict(t=50, b=10, l=10, r=10))
             st.plotly_chart(config_plotly(fig_pie), use_container_width=True)
         
         # Top 10 Global
@@ -741,10 +733,11 @@ with tab_prod:
 
         # --- PREPARACIÓN DE DATOS DETALLADOS ---
         if not df_main.empty:
-            # Cruzamos productos con clientes para traer Categoría y Zona de una sola vez
-            df_merged = pd.merge(df_p, df_main[['id', 'Categoria_Cliente', 'Zona_Comercial']], left_on='ID_Factura', right_on='id', how='left')
+            # ACTUALIZACIÓN: Ahora traemos también 'Vendedor' en el merge
+            df_merged = pd.merge(df_p, df_main[['id', 'Categoria_Cliente', 'Zona_Comercial', 'Vendedor']], left_on='ID_Factura', right_on='id', how='left')
             df_merged['Categoria_Cliente'] = df_merged['Categoria_Cliente'].fillna("Sin Categoría")
             df_merged['Zona_Comercial'] = df_merged['Zona_Comercial'].fillna("Sin Zona")
+            df_merged['Vendedor'] = df_merged['Vendedor'].fillna("Sin Asignar")
 
             st.divider()
             
@@ -753,7 +746,7 @@ with tab_prod:
             with c_cat1: 
                 st.subheader(f"🛍️ Por Categoría")
                 cats = sorted(df_merged['Categoria_Cliente'].unique())
-                cat_sel = st.selectbox("Filtrar Categoría:", cats)
+                cat_sel = st.selectbox("Filtrar Categoría:", cats, key="prod_cat_filter")
             
             with c_cat2:
                 df_cf = df_merged[df_merged['Categoria_Cliente'] == cat_sel]
@@ -767,12 +760,12 @@ with tab_prod:
 
             st.divider()
 
-            # --- 4. POR ZONA COMERCIAL (NUEVO) ---
+            # --- 4. POR ZONA COMERCIAL ---
             c_zon1, c_zon2 = st.columns([1, 3])
             with c_zon1: 
                 st.subheader(f"🌍 Por Zona")
                 zonas = sorted(df_merged['Zona_Comercial'].unique())
-                zona_sel = st.selectbox("Filtrar Zona:", zonas)
+                zona_sel = st.selectbox("Filtrar Zona:", zonas, key="prod_zona_filter")
             
             with c_zon2:
                 df_zf = df_merged[df_merged['Zona_Comercial'] == zona_sel]
@@ -784,6 +777,24 @@ with tab_prod:
                 else:
                     st.info("Sin datos.")
 
+            st.divider()
+
+            # --- 5. POR VENDEDOR (NUEVO) ---
+            c_ven1, c_ven2 = st.columns([1, 3])
+            with c_ven1: 
+                st.subheader(f"👤 Por Vendedor")
+                vendedores = sorted(df_merged['Vendedor'].unique())
+                vend_sel = st.selectbox("Filtrar Vendedor:", vendedores, key="prod_vend_filter")
+            
+            with c_ven2:
+                df_vf = df_merged[df_merged['Vendedor'] == vend_sel]
+                if not df_vf.empty:
+                    top_vend = df_vf.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
+                    fig_vend = px.bar(top_vend, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
+                                     title=f"Top Productos: {vend_sel}", color_discrete_sequence=['#d35400']) # Naranja Oscuro
+                    st.plotly_chart(config_plotly(fig_vend), use_container_width=True)
+                else:
+                    st.info("Sin datos.")
 # === PESTAÑA 4: BAJA ROTACIÓN ===
 with tab_inv:
     if st.button("🔄 Calcular Rotación"):
@@ -895,6 +906,7 @@ with tab_det:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
                     top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                     st.plotly_chart(config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+
 
 
 
