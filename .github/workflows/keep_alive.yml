@@ -1,0 +1,13 @@
+name: Keep App Alive
+
+on:
+  schedule:
+    - cron: "0 */2 * * *" # Se ejecuta cada 2 horas
+  workflow_dispatch: 
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping App
+        run: curl https://dashboard-artk.streamlit.app//
