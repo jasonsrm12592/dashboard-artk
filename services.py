@@ -234,7 +234,6 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_an, names_an):
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        ids_loc_debug = {} # Map ID -> Reason
         if ids_an: 
             try: 
                 # NUEVO: Buscar IDs de Proyecto basados en las Cuentas Analíticas
@@ -242,25 +241,14 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_an, names_an):
                 
                 # Buscar ubicaciones usando el ID del PROYECTO
                 if ids_proy:
-                    found = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', ids_proy]]])
-                    for i in found: ids_loc_debug[i] = "Match by Project ID (x_studio_field_qCgKk)"
-                    ids_loc += found
+                    ids_loc += models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', ids_proy]]])
             except: pass
         if names_an:
             for n in names_an:
-                if len(n)>4: 
-                    term = n.split(' ')[0]
-                    found = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['name', 'ilike', term]]])
-                    for i in found: 
-                        if i not in ids_loc_debug: ids_loc_debug[i] = f"Match by Name (ilike '{term}')"
-                    ids_loc += found
+                if len(n)>4: ids_loc += models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['name', 'ilike', n.split(' ')[0]]]])
         ids_loc = list(set(ids_loc))
         if not ids_loc: return pd.DataFrame(), "NO_BODEGA", []
-        
-        # Get names with debug info
-        locs_data = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_loc], {'fields': ['complete_name']})
-        names = [f"{l['complete_name']} [{ids_loc_debug.get(l['id'], 'Unknown')}]" for l in locs_data]
-        
+        names = [l['complete_name'] for l in models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_loc], {'fields': ['complete_name']})]
         data = models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'read', [models.execute_kw(DB, uid, PASSWORD, 'stock.quant', 'search', [[['location_id', 'child_of', ids_loc], ['company_id', '=', COMPANY_ID]]])], {'fields': ['product_id', 'quantity']})
         df = pd.DataFrame(data)
         if df.empty: return pd.DataFrame(), "NO_STOCK", names

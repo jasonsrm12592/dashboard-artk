@@ -577,6 +577,3 @@ with tab_down:
         if not df_main.empty:
             grp_vend = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index().rename(columns={'invoice_date':'Año'})
             st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(grp_vend), file_name="Performance_Vendedores.xlsx")
-
-
-
