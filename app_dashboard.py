@@ -170,7 +170,7 @@ with tab_kpis:
                 return f"₡{row['Venta_Neta']/1e6:.1f}M {i} {d:.0f}%"
             
             r_fin['T'] = r_fin.apply(txt, axis=1)
-            st.plotly_chart(ui.config_plotly(go.Figure(go.Bar(x=r_fin.sort_values('Venta_Neta').tail(15)['Venta_Neta'], y=r_fin.sort_values('Venta_Neta').tail(15)['Vendedor'], orientation='h', text=r_fin.sort_values('Venta_Neta').tail(15)['T'], textposition='auto', marker_color='#2ecc71'))), use_container_width=True)
+            st.plotly_chart(ui.config_plotly(go.Figure(go.Bar(x=r_fin.sort_values('Venta_Neta').tail(20)['Venta_Neta'], y=r_fin.sort_values('Venta_Neta').tail(20)['Vendedor'], orientation='h', text=r_fin.sort_values('Venta_Neta').tail(20)['T'], textposition='auto', marker_color='#2ecc71'))), use_container_width=True)
 
 # === PESTAÑA 2: PROYECTOS (ESTRUCTURA v10.7) ===
 with tab_renta:
@@ -577,5 +577,6 @@ with tab_down:
         if not df_main.empty:
             grp_vend = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index().rename(columns={'invoice_date':'Año'})
             st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(grp_vend), file_name="Performance_Vendedores.xlsx")
+
 
 
