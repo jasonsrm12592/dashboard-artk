@@ -262,11 +262,15 @@ def cargar_inventario_ubicacion_proyecto_v4(ids_an, names_an, project_id=None):
                 ids_proy += models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', [int(x) for x in ids_an if x]]]])
             except: pass
             
-        # 3. Búsqueda por Nombre de Proyecto (Fallback si no hay link contable)
-        if names_an and not ids_proy:
+            # 3. Búsqueda por Nombre de Proyecto (Siempre ejecutar para mayor robustez)
+        if names_an:
             try:
+                # Buscar también por nombre para asegurar coincidencia
                 ids_proy += models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['name', 'in', names_an]]])
             except: pass
+        
+        # Eliminar duplicados de Proyectos encontrados
+        ids_proy = list(set(ids_proy))
             
         # Buscar ubicaciones usando los IDs de PROYECTO encontrados
         if ids_proy:
