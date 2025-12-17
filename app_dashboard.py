@@ -621,43 +621,82 @@ with tab_vend:
 # === PESTAÑA 8: RADIOGRAFÍA ===
 with tab_det:
     if not df_main.empty:
-        cli = st.selectbox("Buscar Cliente:", sorted(df_main['Cliente'].unique()), index=None, placeholder="Escriba para buscar...")
+        c_search, c_year = st.columns([3, 1])
+        with c_search:
+            cli = st.selectbox("Buscar Cliente:", sorted(df_main['Cliente'].unique()), index=None, placeholder="Escriba para buscar...")
+        
         if cli:
-            df_cl = df_main[df_main['Cliente'] == cli]
-            ultima = df_cl['invoice_date'].max()
-            dias = (datetime.now() - ultima).days
+            # Obtener años disponibles para este cliente
+            df_full_history = df_main[df_main['Cliente'] == cli]
+            available_years = sorted(df_full_history['invoice_date'].dt.year.unique(), reverse=True)
             
-            # KPI Crédito
-            dias_credito = df_cl['Dias_Credito'].mean() if 'Dias_Credito' in df_cl.columns else 0
+            with c_year:
+                # Selector de Año (con opción 'Todos')
+                rad_year = st.selectbox("Año:", ["Todos"] + available_years, key=f"rad_year_{cli}")
             
-            k1, k2, k3, k4, k5 = st.columns(5)
-            with k1: ui.card_kpi("Total Histórico", df_cl['Venta_Neta'].sum(), "border-green")
-            with k2: ui.card_kpi("Última Compra", ultima.strftime('%d-%m-%Y'), "border-blue", formato="raw")
-            with k3: ui.card_kpi("Días Inactivo", dias, "border-red" if dias>90 else "border-gray", formato="numero")
-            with k4: ui.card_kpi("Días Crédito Prom.", dias_credito, "border-orange", formato="numero")
-            with k5: ui.card_kpi("Ubicación", df_cl.iloc[0]['Provincia'], "border-purple", formato="raw")
-            
-            c_h, c_p = st.columns(2)
-            with c_h:
-                st.subheader("Historial")
-                hist = df_cl.groupby(df_cl['invoice_date'].dt.year)['Venta_Neta'].sum().reset_index()
-                st.plotly_chart(ui.config_plotly(px.bar(hist, x='invoice_date', y='Venta_Neta', text_auto='.2s')), use_container_width=True)
-            with c_p:
-                c_head, c_sel = st.columns([1,1])
-                with c_head: st.subheader(f"Top Productos")
-                
-                # Selector Métrica Radiografía
-                with c_sel:
-                    metrica_rad = st.radio("M:", ["Monto", "Cant.", "Freq."], horizontal=True, label_visibility="collapsed", key=f"rad_met_{cli}")
-                
-                if "Monto" in metrica_rad: r_val, r_agg, r_fmt = 'Venta_Neta', 'sum', '.2s'
-                elif "Cant" in metrica_rad: r_val, r_agg, r_fmt = 'quantity', 'sum', '.2s'
-                else: r_val, r_agg, r_fmt = 'ID_Factura', 'nunique', ''
+            # Filtrar datos según selección
+            if rad_year == "Todos":
+                df_cl = df_full_history
+                is_filtered = False
+            else:
+                df_cl = df_full_history[df_full_history['invoice_date'].dt.year == rad_year]
+                is_filtered = True
 
-                if not df_prod.empty:
-                    df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
-                    top = df_cp.groupby('Producto')[r_val].agg(r_agg).sort_values(ascending=True).tail(10).reset_index()
-                    st.plotly_chart(ui.config_plotly(px.bar(top, x=r_val, y='Producto', orientation='h', text_auto=r_fmt)), use_container_width=True)
+            # Cálculos KPI (Sobre la data filtrada)
+            if not df_cl.empty:
+                ultima = df_cl['invoice_date'].max()
+                dias = (datetime.now() - ultima).days
+                
+                # KPI Crédito (Promedio general, no varía mucho por año pero lo recalculamos)
+                dias_credito = df_cl['Dias_Credito'].mean() if 'Dias_Credito' in df_cl.columns else 0
+                
+                k1, k2, k3, k4, k5 = st.columns(5)
+                with k1: ui.card_kpi(f"Venta {'Total' if not is_filtered else rad_year}", df_cl['Venta_Neta'].sum(), "border-green")
+                with k2: ui.card_kpi("Última Compra", ultima.strftime('%d-%m-%Y'), "border-blue", formato="raw")
+                with k3: ui.card_kpi("Días Inactivo", dias, "border-red" if dias>90 else "border-gray", formato="numero")
+                with k4: ui.card_kpi("Días Crédito Prom.", dias_credito, "border-orange", formato="numero")
+                with k5: ui.card_kpi("Ubicación", df_cl.iloc[0]['Provincia'], "border-purple", formato="raw")
+                
+                c_h, c_p = st.columns(2)
+                with c_h:
+                    st.subheader("Historial")
+                    if is_filtered:
+                        # Vista Mensual (Año seleccionado)
+                        hist = df_cl.groupby(df_cl['invoice_date'].dt.month)['Venta_Neta'].sum().reset_index()
+                        # Mapear número de mes a nombre
+                        hist['Mes'] = hist['invoice_date'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
+                                                              7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
+                        fig_h = px.bar(hist, x='Mes', y='Venta_Neta', text_auto='.2s', title=f"Ventas Mensuales {rad_year}")
+                    else:
+                        # Vista Anual (Historico Completo)
+                        hist = df_cl.groupby(df_cl['invoice_date'].dt.year)['Venta_Neta'].sum().reset_index()
+                        fig_h = px.bar(hist, x='invoice_date', y='Venta_Neta', text_auto='.2s', title="Tendencia Anual")
+                        fig_h.update_xaxes(type='category') # Asegurar que años se vean como categorías
+                    
+                    st.plotly_chart(ui.config_plotly(fig_h), use_container_width=True)
+
+                with c_p:
+                    c_head, c_sel = st.columns([1,1])
+                    with c_head: st.subheader(f"Top Productos")
+                    
+                    # Selector Métrica Radiografía
+                    with c_sel:
+                        metrica_rad = st.radio("M:", ["Monto", "Cant.", "Freq."], horizontal=True, label_visibility="collapsed", key=f"rad_met_{cli}")
+                    
+                    if "Monto" in metrica_rad: r_val, r_agg, r_fmt = 'Venta_Neta', 'sum', '.2s'
+                    elif "Cant" in metrica_rad: r_val, r_agg, r_fmt = 'quantity', 'sum', '.2s'
+                    else: r_val, r_agg, r_fmt = 'ID_Factura', 'nunique', ''
+
+                    if not df_prod.empty:
+                        # Filtrar productos usando las facturas del cliente filtrado
+                        df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
+                        if not df_cp.empty:
+                            top = df_cp.groupby('Producto')[r_val].agg(r_agg).sort_values(ascending=True).tail(10).reset_index()
+                            st.plotly_chart(ui.config_plotly(px.bar(top, x=r_val, y='Producto', orientation='h', text_auto=r_fmt)), use_container_width=True)
+                        else:
+                            st.info("No hay productos para este rango.")
+            else:
+                 st.info(f"No hay registros de ventas para el año {rad_year}.")
 
 # === PESTAÑA 9: CENTRO DE DESCARGAS ===
 with tab_down:
