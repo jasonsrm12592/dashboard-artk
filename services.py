@@ -28,12 +28,14 @@ def cargar_datos_generales():
         if not uid: return None
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         dominio = [['move_type', 'in', ['out_invoice', 'out_refund']], ['state', '=', 'posted'], ['invoice_date', '>=', '2021-01-01'], ['company_id', '=', COMPANY_ID]]
-        campos = ['name', 'invoice_date', 'amount_untaxed_signed', 'partner_id', 'invoice_user_id']
+        campos = ['name', 'invoice_date', 'invoice_date_due', 'amount_untaxed_signed', 'partner_id', 'invoice_user_id']
         ids = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'search', [dominio])
         registros = models.execute_kw(DB, uid, PASSWORD, 'account.move', 'read', [ids], {'fields': campos})
         df = pd.DataFrame(registros)
         if not df.empty:
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
+            df['invoice_date_due'] = pd.to_datetime(df['invoice_date_due'])
+            df['Dias_Credito'] = (df['invoice_date_due'] - df['invoice_date']).dt.days
             df['Mes'] = df['invoice_date'].dt.to_period('M').dt.to_timestamp()
             df['Mes_Num'] = df['invoice_date'].dt.month
             df['Cliente'] = df['partner_id'].apply(lambda x: x[1] if x else "Sin Cliente")
@@ -117,13 +119,22 @@ def cargar_inventario_general():
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         dominio = ['|', ['active', '=', True], ['active', '=', False]]
         ids = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'search', [dominio])
-        registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'default_code']})
+        registros = models.execute_kw(DB, uid, PASSWORD, 'product.product', 'read', [ids], {'fields': ['name', 'qty_available', 'standard_price', 'detailed_type', 'default_code', 'brand_alrotek_id']})
         df = pd.DataFrame(registros)
         if not df.empty:
             df['Valor_Inventario'] = df['qty_available'] * df['standard_price']
             df.rename(columns={'id': 'ID_Producto', 'name': 'Producto', 'qty_available': 'Stock', 'standard_price': 'Costo', 'default_code': 'Referencia'}, inplace=True)
             tipo_map = {'product': 'Almacenable', 'service': 'Servicio', 'consu': 'Consumible'}
             df['Tipo'] = df['detailed_type'].map(tipo_map).fillna('Otro')
+            
+            # Procesar Marca (brand_alrotek_id)
+            def extract_brand(val):
+                if isinstance(val, list) and len(val) > 1:
+                    return val[1]
+                return "Sin Marca"
+            
+            df['Marca'] = df['brand_alrotek_id'].apply(extract_brand) if 'brand_alrotek_id' in df.columns else "Sin Marca"
+            
         return df
     except: return pd.DataFrame()
 
@@ -229,23 +240,44 @@ def cargar_detalle_horas_mes(ids):
     except: return pd.DataFrame()
 
 @st.cache_data(ttl=900)
-def cargar_inventario_ubicacion_proyecto_v4(ids_an, names_an):
+def cargar_inventario_ubicacion_proyecto_v4(ids_an, names_an, project_id=None):
     try:
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        
+        ids_loc = []
+        
+        # 1. Búsqueda DIRECTA por ID de Proyecto (Prioridad Alta)
+        if project_id:
+            try:
+                locs_by_proj = models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', '=', project_id]]])
+                if locs_by_proj: ids_loc += locs_by_proj
+            except: pass
+
+        # 2. Búsqueda por Cuenta Analítica
+        ids_proy = []
         if ids_an: 
             try: 
-                # NUEVO: Buscar IDs de Proyecto basados en las Cuentas Analíticas
-                ids_proy = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', [int(x) for x in ids_an if x]]]])
-                
-                # Buscar ubicaciones usando el ID del PROYECTO
-                if ids_proy:
-                    ids_loc += models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', ids_proy]]])
+                ids_proy += models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', [int(x) for x in ids_an if x]]]])
             except: pass
-        if names_an:
+            
+        # 3. Búsqueda por Nombre de Proyecto (Fallback si no hay link contable)
+        if names_an and not ids_proy:
+            try:
+                ids_proy += models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['name', 'in', names_an]]])
+            except: pass
+            
+        # Buscar ubicaciones usando los IDs de PROYECTO encontrados
+        if ids_proy:
+             ids_loc += models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['x_studio_field_qCgKk', 'in', ids_proy]]])
+
+            
+        # 3. Búsqueda por Nombre (Legacy / Fallback)
+        if names_an and not ids_loc:
             for n in names_an:
                 if len(n)>4: ids_loc += models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['name', 'ilike', n.split(' ')[0]]]])
+        
         ids_loc = list(set(ids_loc))
         if not ids_loc: return pd.DataFrame(), "NO_BODEGA", []
         names = [l['complete_name'] for l in models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'read', [ids_loc], {'fields': ['complete_name']})]

@@ -17,6 +17,35 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# HELPER: Gráfico de Pastel Mejorado
+def create_improved_pie(df_in, col_val, col_name, title, threshold=0.02, show_percent_only=True):
+    # Agrupar y ordenar
+    df_g = df_in.groupby(col_name)[col_val].sum().reset_index().sort_values(col_val, ascending=False)
+    
+    # Calcular %
+    total = df_g[col_val].sum()
+    if total == 0: return go.Figure()
+    
+    df_g['Pct'] = df_g[col_val] / total
+    
+    # Agrupar menores
+    mask = df_g['Pct'] < threshold
+    if mask.any():
+        otros = df_g[mask][col_val].sum()
+        df_g = df_g[~mask].copy()
+        df_g = pd.concat([df_g, pd.DataFrame({col_name: ['Otros/Menores'], col_val: [otros]})], ignore_index=True)
+    
+    # Crear gráfico
+    fig = px.pie(df_g, values=col_val, names=col_name, title=title, hole=0.4)
+    
+    # Configurar layout
+    info_mode = 'percent' if show_percent_only else 'percent+label'
+    fig.update_traces(textposition='inside', textinfo=info_mode)
+    fig.update_layout(legend=dict(orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.05))
+    
+    return fig
+
+
 # Cargar estilos
 ui.load_styles()
 
@@ -218,14 +247,29 @@ with tab_renta:
             
             color_alerta = "bg-alert-green" if pct_alerta > 30 else ("bg-alert-warn" if pct_alerta > 10 else "bg-alert-red")
 
+            # 4. Margen REAL (Solicitud Usuario: Total Ing - (Todos los Costos - Provisiones))
+            # Costo Real = (Retail + Suministros + Instalación + Ajustes + Otros + WIP + Inv + Compras + MO) - Provisiones
+            total_costo_real = (
+                totales['Costo Retail'] + totales['Suministros'] + totales['Instalación'] + 
+                totales['Ajustes Inv'] + totales['Otros Gastos'] + totales['WIP'] +
+                (df_s['Valor_Total'].sum() if not df_s.empty else 0) + 
+                (df_c['Monto_Pendiente'].sum() if not df_c.empty else 0) + 
+                (df_h['Costo'].sum() if not df_h.empty else 0)
+            ) - totales['Provisión']
+
+            utilidad_real = total_ing - total_costo_real
+            margen_real_pct = (utilidad_real / total_ing * 100) if total_ing > 0 else 0
+            color_real = "border-green" if margen_real_pct > 20 else ("border-orange" if margen_real_pct > 0 else "border-red")
+
             st.markdown("#### 🚦 Semáforo de Alerta Operativa")
             st.caption("Margen calculado como: (Total Ingresos - Costos Vivos). Excluye costos contables cerrados y provisiones.")
             
-            k1, k2, k3, k4 = st.columns(4)
+            k1, k2, k3, k4, k5 = st.columns(5)
             with k1: ui.card_kpi("Ingreso Total Proy.", total_ing, "border-green")
             with k2: ui.card_kpi("Costo Vivo (Alerta)", costo_vivo, "border-red")
             with k3: ui.card_kpi("MARGEN ALERTA", margen_alerta, color_alerta)
             with k4: ui.card_kpi("% Cobertura", pct_alerta, "border-blue", formato="percent")
+            with k5: ui.card_kpi("MARGEN REAL", margen_real_pct, color_real, formato="percent")
             
             st.divider()
             
@@ -377,6 +421,11 @@ with tab_prod:
                     st.plotly_chart(ui.config_plotly(fig_vend), use_container_width=True)
                 else:
                     st.info("Sin datos.")
+            
+            
+            # --- 6. ANÁLISIS DE RENTABILIDAD (NUEVO) ---
+            # (Deshabilitado por solicitud del usuario)
+
 # === PESTAÑA 4: BAJA ROTACIÓN ===
 with tab_inv:
     if st.button("🔄 Calcular Rotación"):
@@ -414,9 +463,12 @@ with tab_cli:
         anio_c = st.selectbox("Año", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True), key="sc")
         df_c = df_main[df_main['invoice_date'].dt.year == anio_c]
         c1, c2, c3 = st.columns(3)
-        with c1: st.plotly_chart(ui.config_plotly(px.pie(df_c.groupby('Provincia')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Provincia')), use_container_width=True)
-        with c2: st.plotly_chart(ui.config_plotly(px.pie(df_c.groupby('Zona_Comercial')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Zona_Comercial')), use_container_width=True)
-        with c3: st.plotly_chart(ui.config_plotly(px.pie(df_c.groupby('Categoria_Cliente')['Venta_Neta'].sum().reset_index(), values='Venta_Neta', names='Categoria_Cliente')), use_container_width=True)
+        with c1: 
+            st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Provincia', 'Ventas por Provincia')), use_container_width=True)
+        with c2: 
+            st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Zona_Comercial', 'Ventas por Zona')), use_container_width=True)
+        with c3: 
+            st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Categoria_Cliente', 'Ventas por Categoría')), use_container_width=True)
         st.divider()
         df_old = df_main[df_main['invoice_date'].dt.year == (anio_c - 1)]
         cli_now = set(df_c['Cliente'])
@@ -438,6 +490,56 @@ with tab_cli:
             if perdidos:
                 df_l = df_old[df_old['Cliente'].isin(perdidos)].groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                 st.plotly_chart(ui.config_plotly(px.bar(df_l, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
+
+        st.divider()
+        
+        # --- ANÁLISIS DE RIESGO (NUEVO) ---
+        st.subheader("🚨 Clientes en Riesgo (Alerta Temprana)")
+        st.caption("Clientes activos que han superado en 1.5x su ciclo habitual de compra.")
+        
+        # 1. Calcular frecuencia por cliente
+        df_risk = df_main.sort_values(['Cliente', 'invoice_date'])
+        df_risk['Prev_Date'] = df_risk.groupby('Cliente')['invoice_date'].shift(1)
+        df_risk['Days_Diff'] = (df_risk['invoice_date'] - df_risk['Prev_Date']).dt.days
+        
+        # Promedio histórico por cliente
+        freq_cli = df_risk.groupby('Cliente')['Days_Diff'].mean().reset_index().rename(columns={'Days_Diff': 'Ciclo_Habitual'})
+        
+        # Última compra
+        last_buy = df_risk.groupby('Cliente')['invoice_date'].max().reset_index().rename(columns={'invoice_date': 'Ultima_Compra'})
+        
+        # Unir
+        df_alerta = pd.merge(freq_cli, last_buy, on='Cliente')
+        df_alerta['Dias_Sin_Comprar'] = (datetime.now() - df_alerta['Ultima_Compra']).dt.days
+        
+        # Lógica de Riesgo: (Días > Ciclo*1.5) Y (Días < 365) [No perdidos aún] Y (Ciclo > 0)
+        df_alerta['Alerta'] = (df_alerta['Dias_Sin_Comprar'] > (df_alerta['Ciclo_Habitual'] * 1.5)) & \
+                              (df_alerta['Dias_Sin_Comprar'] < 365) & \
+                              (df_alerta['Ciclo_Habitual'] > 0)
+                              
+        alertas = df_alerta[df_alerta['Alerta']].sort_values('Venta_Neta', ascending=False) if 'Venta_Neta' in df_alerta.columns else df_alerta[df_alerta['Alerta']].copy() 
+        # (Nota: Venta_Neta no está en df_alerta, hay que unirla si queremos ordenar por importancia)
+        
+        # Traer Venta Total Histórica para ordenar
+        vta_hist = df_main.groupby('Cliente')['Venta_Neta'].sum().reset_index()
+        alertas = pd.merge(alertas, vta_hist, on='Cliente', how='left').sort_values('Venta_Neta', ascending=False)
+        
+        if not alertas.empty:
+            c_r1, c_r2 = st.columns([1,3])
+            with c_r1:
+                ui.card_kpi("Clientes en Riesgo", len(alertas), "bg-alert-warn", formato="numero")
+                
+            with c_r2: 
+                # Mostrar tabla simplificada
+                st.dataframe(
+                    alertas[['Cliente', 'Ciclo_Habitual', 'Dias_Sin_Comprar', 'Venta_Neta']].style.format({
+                        'Ciclo_Habitual': '{:.0f} días',
+                        'Dias_Sin_Comprar': '{:.0f} días',
+                        'Venta_Neta': '₡{:,.0f}'
+                    }), use_container_width=True, height=300
+                )
+        else:
+            st.success("✅ No se detectan clientes en riesgo de fuga inminente basado en sus ciclos de compra.")
 
 # === PESTAÑA 7: VENDEDORES ===
 with tab_vend:
@@ -464,6 +566,58 @@ with tab_vend:
                 df_lst = df_v_old[df_v_old['Cliente'].isin(perdidos_v)].groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                 st.plotly_chart(ui.config_plotly(px.bar(df_lst, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
 
+        st.divider()
+        
+        st.divider()
+        
+        # Filtrar productos correspondientes a las facturas del vendedor seleccionado
+        if not df_v.empty and not df_prod.empty:
+            ids_facturas_vendedor = df_v['id'].unique()
+            df_prod_vend = df_prod[df_prod['ID_Factura'].isin(ids_facturas_vendedor)]
+            
+            if not df_prod_vend.empty:
+                # --- SELECTOR DE MÉTRICA ---
+                c_sel1, c_sel2 = st.columns([1, 3])
+                with c_sel1:
+                    metrica_vend = st.radio("Ver por:", ["Monto (₡)", "Cantidad (Und)", "Freq. (Docs)"], horizontal=True, label_visibility="collapsed")
+                
+                # Config métrica
+                if "Monto" in metrica_vend: val_col, agg, fmt = 'Venta_Neta', 'sum', '.2s'
+                elif "Cantidad" in metrica_vend: val_col, agg, fmt = 'quantity', 'sum', '.2s'
+                else: val_col, agg, fmt = 'ID_Factura', 'nunique', ''
+                
+                c_top10, c_brand = st.columns(2)
+                
+                with c_top10:
+                    st.subheader(f"🏆 Top 10 Productos ({metrica_vend})")
+                    top_prods = df_prod_vend.groupby('Producto')[val_col].agg(agg).sort_values(ascending=True).tail(10).reset_index() # Sort Ascending for Horizontal Bar to put max at top? No, plotly needs max at bottom for H bar usually? Let's stick to standard logic: tail(10) gets biggest.
+                    # Usually for barh, y-axis order: bottom to top. 
+                    
+                    fig_vp = px.bar(top_prods, x=val_col, y='Producto', orientation='h', text_auto=fmt, 
+                                    title=f"Top Productos")
+                    fig_vp.update_traces(marker_color='#27ae60')
+                    st.plotly_chart(ui.config_plotly(fig_vp), use_container_width=True)
+                
+                with c_brand:
+                    st.subheader(f"🥧 Mix por Marca ({metrica_vend})")
+                    # Traer datos de marca desde inventario
+                    df_inv = services.cargar_inventario_general()
+                    if not df_inv.empty and 'Marca' in df_inv.columns:
+                        df_merged_brand = pd.merge(df_prod_vend, df_inv[['ID_Producto', 'Marca']], on='ID_Producto', how='left')
+                        df_merged_brand['Marca'] = df_merged_brand['Marca'].fillna("Sin Marca")
+                        
+                        # Preparar datos para el pie chart usando la métrica seleccionada
+                        # Para count distinct (ID_Factura), groupby directo
+                        df_pie_data = df_merged_brand.groupby('Marca')[val_col].agg(agg).reset_index()
+                        
+                        # Usar el helper
+                        fig_brand = create_improved_pie(df_pie_data, val_col, 'Marca', f"Mix ({metrica_vend})")
+                        st.plotly_chart(ui.config_plotly(fig_brand), use_container_width=True)
+                    else:
+                        st.warning("No se pudo cargar información de Marcas.")
+            else:
+                st.info("No hay detalle de productos disponible para este vendedor.")
+
 # === PESTAÑA 8: RADIOGRAFÍA ===
 with tab_det:
     if not df_main.empty:
@@ -472,22 +626,38 @@ with tab_det:
             df_cl = df_main[df_main['Cliente'] == cli]
             ultima = df_cl['invoice_date'].max()
             dias = (datetime.now() - ultima).days
-            k1, k2, k3, k4 = st.columns(4)
+            
+            # KPI Crédito
+            dias_credito = df_cl['Dias_Credito'].mean() if 'Dias_Credito' in df_cl.columns else 0
+            
+            k1, k2, k3, k4, k5 = st.columns(5)
             with k1: ui.card_kpi("Total Histórico", df_cl['Venta_Neta'].sum(), "border-green")
             with k2: ui.card_kpi("Última Compra", ultima.strftime('%d-%m-%Y'), "border-blue", formato="raw")
             with k3: ui.card_kpi("Días Inactivo", dias, "border-red" if dias>90 else "border-gray", formato="numero")
-            with k4: ui.card_kpi("Ubicación", df_cl.iloc[0]['Provincia'], "border-purple", formato="raw")
+            with k4: ui.card_kpi("Días Crédito Prom.", dias_credito, "border-orange", formato="numero")
+            with k5: ui.card_kpi("Ubicación", df_cl.iloc[0]['Provincia'], "border-purple", formato="raw")
+            
             c_h, c_p = st.columns(2)
             with c_h:
                 st.subheader("Historial")
                 hist = df_cl.groupby(df_cl['invoice_date'].dt.year)['Venta_Neta'].sum().reset_index()
                 st.plotly_chart(ui.config_plotly(px.bar(hist, x='invoice_date', y='Venta_Neta', text_auto='.2s')), use_container_width=True)
             with c_p:
-                st.subheader("Top Productos")
+                c_head, c_sel = st.columns([1,1])
+                with c_head: st.subheader(f"Top Productos")
+                
+                # Selector Métrica Radiografía
+                with c_sel:
+                    metrica_rad = st.radio("M:", ["Monto", "Cant.", "Freq."], horizontal=True, label_visibility="collapsed", key=f"rad_met_{cli}")
+                
+                if "Monto" in metrica_rad: r_val, r_agg, r_fmt = 'Venta_Neta', 'sum', '.2s'
+                elif "Cant" in metrica_rad: r_val, r_agg, r_fmt = 'quantity', 'sum', '.2s'
+                else: r_val, r_agg, r_fmt = 'ID_Factura', 'nunique', ''
+
                 if not df_prod.empty:
                     df_cp = df_prod[df_prod['ID_Factura'].isin(df_cl['id'])]
-                    top = df_cp.groupby('Producto')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
-                    st.plotly_chart(ui.config_plotly(px.bar(top, x='Venta_Neta', y='Producto', orientation='h', text_auto='.2s')), use_container_width=True)
+                    top = df_cp.groupby('Producto')[r_val].agg(r_agg).sort_values(ascending=True).tail(10).reset_index()
+                    st.plotly_chart(ui.config_plotly(px.bar(top, x=r_val, y='Producto', orientation='h', text_auto=r_fmt)), use_container_width=True)
 
 # === PESTAÑA 9: CENTRO DE DESCARGAS ===
 with tab_down:
