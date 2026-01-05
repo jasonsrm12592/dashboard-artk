@@ -349,10 +349,23 @@ def cargar_facturacion_estimada_v2(ids_analiticas, tc_usd):
     except: return pd.DataFrame()
 
 def cargar_metas():
-    if os.path.exists("metas.csv"):
-        df = pd.read_csv("metas.csv")
+    # URL RAW de GitHub del archivo metas.csv
+    GITHUB_CSV_URL = "https://raw.githubusercontent.com/jasonsrm12592/dashboard-artk/main/metas.csv"
+    
+    try:
+        # Intentar leer desde GitHub
+        df = pd.read_csv(GITHUB_CSV_URL)
         df['Mes'] = pd.to_datetime(df['Mes'])
         df['Mes_Num'] = df['Mes'].dt.month
         df['Anio'] = df['Mes'].dt.year
         return df
+    except Exception as e:
+        # Si falla (sin internet, etc), intentar leer archivo local
+        if os.path.exists("metas.csv"):
+            df = pd.read_csv("metas.csv")
+            df['Mes'] = pd.to_datetime(df['Mes'])
+            df['Mes_Num'] = df['Mes'].dt.month
+            df['Anio'] = df['Mes'].dt.year
+            return df
+            
     return pd.DataFrame({'Mes': [], 'Meta': [], 'Mes_Num': [], 'Anio': []})
