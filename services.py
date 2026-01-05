@@ -349,8 +349,8 @@ def cargar_facturacion_estimada_v2(ids_analiticas, tc_usd):
     except: return pd.DataFrame()
 
 def cargar_metas():
-    if os.path.exists("metas.xlsx"):
-        df = pd.read_excel("metas.xlsx")
+    if os.path.exists("metas.csv"):
+        df = pd.read_csv("metas.csv")
         df['Mes'] = pd.to_datetime(df['Mes'])
         df['Mes_Num'] = df['Mes'].dt.month
         df['Anio'] = df['Mes'].dt.year
