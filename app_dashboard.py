@@ -698,91 +698,112 @@ with tab_det:
             else:
                  st.info(f"No hay registros de ventas para el año {rad_year}.")
 
-# === PESTAÑA 9: CENTRO DE DESCARGAS ===
+# === PESTAÑA 9: CENTRO DE DESCARGAS (ACTUALIZADO) ===
 with tab_down:
     st.header("📥 Centro de Descargas")
-    st.markdown("Descargue aquí los datos utilizados para generar los gráficos del dashboard.")
+    st.markdown("Descarga aquí los datos consolidados que alimentan los gráficos de la aplicación.")
     
     col_d1, col_d2 = st.columns(2)
     
-    # --- SECCIÓN 1: VENTAS Y GENERAL ---
+    # --- SECCIÓN 1: VENTAS Y OBJETIVOS ---
     with col_d1:
-        st.subheader("📊 Ventas y Visión General")
+        st.subheader("📊 Ventas y Metas")
         
-        # 1. Ventas Generales (Todas)
+        # 1. Ventas Generales (Detalle Facturas)
         if not df_main.empty:
             buffer_main = ui.convert_df_to_excel(df_main[['invoice_date', 'name', 'Cliente', 'Vendedor', 'Venta_Neta', 'Provincia', 'Zona_Comercial', 'Categoria_Cliente']], "Ventas_General")
-            st.download_button("📥 Ventas Históricas (Detalle Facturas)", data=buffer_main, file_name="Ventas_Generales.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        
-        # 2. Ventas Semana Actual (Recalculado)
-        hoy = datetime.now()
-        start_week = hoy - timedelta(days=hoy.weekday())
-        end_week = start_week + timedelta(days=6)
-        if not df_main.empty:
-            mask_week = (df_main['invoice_date'].dt.date >= start_week.date()) & (df_main['invoice_date'].dt.date <= end_week.date())
-            df_week_dl = df_main[mask_week][['invoice_date', 'name', 'Cliente', 'Venta_Neta']].copy()
-            if not df_week_dl.empty:
-                st.download_button(f"📥 Ventas Semana Actual ({start_week.strftime('%d/%m')})", 
-                                   data=ui.convert_df_to_excel(df_week_dl), file_name=f"Ventas_Semana_{start_week.strftime('%d-%m')}.xlsx")
-            else:
-                st.warning("No hay ventas esta semana para descargar.")
+            st.download_button("📥 Histórico de Ventas (Completo)", data=buffer_main, file_name="Ventas_Generales_Alrotek.xlsx")
 
-        # 3. Mix por Plan (Analítico)
-        if not df_prod.empty and not df_an.empty:
-             # Reutilizamos lógica de mapeo simple para descarga
-            mapa_dl = dict(zip(df_an['id_cuenta_analitica'].astype(str), df_an['Plan_Nombre']))
-            def get_plan(d):
-                try: return mapa_dl.get(str(list((d if isinstance(d,dict) else ast.literal_eval(str(d))).keys())[0]), "Otro")
-                except: return "Retail/Otro"
+        # 2. Datos de Cumplimiento de Meta (Gráfico Tab 1)
+        if not df_main.empty and not df_metas.empty:
+            anio_actual = datetime.now().year
+            v_act = df_main[df_main['invoice_date'].dt.year == anio_actual].groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Venta_Real'})
+            v_meta = df_metas[df_metas['Anio'] == anio_actual].groupby('Mes_Num')['Meta'].sum().reset_index()
+            df_cumplimiento = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
+            df_cumplimiento['Mes'] = df_cumplimiento['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
+            df_cumplimiento['Cumplimiento_Pct'] = (df_cumplimiento['Venta_Real'] / df_cumplimiento['Meta'] * 100).fillna(0)
             
-            df_mix_dl = df_prod.copy()
-            df_mix_dl['Plan'] = df_mix_dl['analytic_distribution'].apply(get_plan)
-            grp_mix = df_mix_dl.groupby(['Plan', df_mix_dl['date'].dt.year])['Venta_Neta'].sum().reset_index().rename(columns={'date':'Año'})
-            st.download_button("📥 Mix por Plan (Resumen Anual)", data=ui.convert_df_to_excel(grp_mix), file_name="Mix_Ventas_Plan.xlsx")
+            st.download_button("📥 Reporte Cumplimiento de Metas", data=ui.convert_df_to_excel(df_cumplimiento), file_name=f"Cumplimiento_Metas_{anio_actual}.xlsx")
+
+        # 3. Datos Comparativos Anuales (Gráfico Tab 1)
+        if not df_main.empty:
+            anio_actual = datetime.now().year
+            anio_ant = anio_actual - 1
+            v_act = df_main[df_main['invoice_date'].dt.year == anio_actual].groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': f'Venta_{anio_actual}'})
+            v_ant = df_main[df_main['invoice_date'].dt.year == anio_ant].groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': f'Venta_{anio_ant}'})
+            df_comp = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_ant, on='Mes_Num', how='left').fillna(0)
+            df_comp['Diferencia'] = df_comp[f'Venta_{anio_actual}'] - df_comp[f'Venta_{anio_ant}']
+            
+            st.download_button(f"📥 Comparativo {anio_actual} vs {anio_ant}", data=ui.convert_df_to_excel(df_comp), file_name="Comparativo_Anual.xlsx")
 
     # --- SECCIÓN 2: PRODUCTOS E INVENTARIO ---
     with col_d2:
-        st.subheader("📦 Productos e Inventario")
+        st.subheader("📦 Productos")
         
-        # 4. Detalle de Productos
+        # 4. Mix por Tipo y Categoría (Gráficos Tab 3)
         if not df_prod.empty:
-            # Preparamos un DF limpio
-            df_p_clean = df_prod[['date', 'ID_Factura', 'Producto', 'quantity', 'Venta_Neta']].copy()
-            st.download_button("📥 Movimientos de Productos (Todos)", data=ui.convert_df_to_excel(df_p_clean), file_name="Detalle_Productos.xlsx")
+            # Agregado por Tipo (Global)
+            df_p_clean = df_prod.merge(df_cat[['ID_Producto','Tipo']], on='ID_Producto', how='left').fillna({'Tipo':'Otro'})
+            grp_tipo = df_p_clean.groupby('Tipo')['Venta_Neta'].sum().reset_index()
+            
+            # Agregado por Vendedor y Producto (Top Vendedores)
+            df_top_vend = pd.merge(df_p_clean, df_main[['id', 'Vendedor']], left_on='ID_Factura', right_on='id', how='left')
+            grp_vend_prod = df_top_vend.groupby(['Vendedor', 'Producto'])['Venta_Neta'].sum().reset_index()
+
+            # Usamos un ExcelWriter para bajar varias hojas en un solo archivo
+            buffer_prod = io.BytesIO()
+            with pd.ExcelWriter(buffer_prod, engine='openpyxl') as writer:
+                df_prod.to_excel(writer, sheet_name='Detalle_Movimientos', index=False)
+                grp_tipo.to_excel(writer, sheet_name='Mix_por_Tipo', index=False)
+                grp_vend_prod.to_excel(writer, sheet_name='Top_Producto_Vendedor', index=False)
+            
+            st.download_button("📥 Reporte Maestro de Productos (Multi-Hoja)", data=buffer_prod.getvalue(), file_name="Maestro_Productos.xlsx")
         
         # 5. Inventario Baja Rotación
-        if st.button("🔄 Generar Reporte Baja Rotación (Reciente)"):
-            with st.spinner("Procesando inventario..."):
-                df_inv_dl, status_inv = services.cargar_inventario_baja_rotacion()
-                if not df_inv_dl.empty:
-                    st.download_button("📥 Descargar Baja Rotación", 
-                                       data=ui.convert_df_to_excel(df_inv_dl), 
-                                       file_name="Inventario_Baja_Rotacion.xlsx")
-                else:
-                    st.error(f"No se pudo generar: {status_inv}")
+        if st.button("🔄 Generar Baja Rotación"):
+            df_inv_dl, _ = services.cargar_inventario_baja_rotacion()
+            if not df_inv_dl.empty:
+                st.download_button("📥 Descargar Baja Rotación", data=ui.convert_df_to_excel(df_inv_dl), file_name="Baja_Rotacion.xlsx")
 
     st.divider()
-    
     col_d3, col_d4 = st.columns(2)
-    
-    # --- SECCIÓN 3: COMERCIAL Y CARTERA ---
+
+    # --- SECCIÓN 3: CARTERA Y RIESGO ---
     with col_d3:
-        st.subheader("💰 Cartera y Clientes")
+        st.subheader("💰 Cartera y Riesgo")
         
-        # 6. Cartera (Cuentas por Cobrar)
+        # 6. Cartera y Antigüedad (Gráfico Tab 5)
         df_cx_dl = services.cargar_cartera()
         if not df_cx_dl.empty:
-            st.download_button("📥 Reporte de Cartera (CXC)", data=ui.convert_df_to_excel(df_cx_dl), file_name="Reporte_Cartera.xlsx")
+            # Resumen por Antigüedad
+            res_ant = df_cx_dl.groupby('Antiguedad')['amount_residual'].sum().reset_index()
             
-        # 7. Segmentación (Resumen)
-        if not df_main.empty:
-            grp_seg = df_main.groupby(['Categoria_Cliente', 'Zona_Comercial'])['Venta_Neta'].sum().reset_index()
-            st.download_button("📥 Ventas por Segmento/Zona", data=ui.convert_df_to_excel(grp_seg), file_name="Ventas_Segmentacion.xlsx")
+            buffer_cx = io.BytesIO()
+            with pd.ExcelWriter(buffer_cx, engine='openpyxl') as writer:
+                df_cx_dl.to_excel(writer, sheet_name='Detalle_Facturas', index=False)
+                res_ant.to_excel(writer, sheet_name='Resumen_Antiguedad', index=False)
+                
+            st.download_button("📥 Reporte Cartera y Antigüedad", data=buffer_cx.getvalue(), file_name="Reporte_Cartera.xlsx")
 
-    with col_d4:
-        st.subheader("👤 Vendedores")
-        
-        # 8. Desempeño Vendedores
+        # 7. Clientes en Riesgo (Alerta Tab 6)
         if not df_main.empty:
-            grp_vend = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index().rename(columns={'invoice_date':'Año'})
-            st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(grp_vend), file_name="Performance_Vendedores.xlsx")
+            # Recalcular lógica de riesgo
+            df_risk = df_main.sort_values(['Cliente', 'invoice_date'])
+            df_risk['Prev_Date'] = df_risk.groupby('Cliente')['invoice_date'].shift(1)
+            df_risk['Days_Diff'] = (df_risk['invoice_date'] - df_risk['Prev_Date']).dt.days
+            freq_cli = df_risk.groupby('Cliente')['Days_Diff'].mean().reset_index().rename(columns={'Days_Diff': 'Ciclo_Habitual'})
+            last_buy = df_risk.groupby('Cliente')['invoice_date'].max().reset_index().rename(columns={'invoice_date': 'Ultima_Compra'})
+            df_alerta = pd.merge(freq_cli, last_buy, on='Cliente')
+            df_alerta['Dias_Sin_Comprar'] = (datetime.now() - df_alerta['Ultima_Compra']).dt.days
+            df_alerta['Alerta'] = (df_alerta['Dias_Sin_Comprar'] > (df_alerta['Ciclo_Habitual'] * 1.5)) & (df_alerta['Dias_Sin_Comprar'] < 365)
+            riesgo_dl = df_alerta[df_alerta['Alerta']].copy()
+            
+            if not riesgo_dl.empty:
+                st.download_button("📥 Clientes en Riesgo (Alerta Fuga)", data=ui.convert_df_to_excel(riesgo_dl), file_name="Clientes_En_Riesgo.xlsx")
+
+    # --- SECCIÓN 4: VENDEDORES ---
+    with col_d4:
+        st.subheader("👤 Performance")
+        if not df_main.empty:
+            perf = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index()
+            st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(perf), file_name="Performance_Vendedores.xlsx")
