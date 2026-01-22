@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import ast
+import io
 
 # Importar módulos locales
 import config
@@ -807,3 +808,4 @@ with tab_down:
         if not df_main.empty:
             perf = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index()
             st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(perf), file_name="Performance_Vendedores.xlsx")
+
