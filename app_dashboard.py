@@ -310,52 +310,91 @@ with tab_renta:
             with t3: st.dataframe(df_f, use_container_width=True)
             with t4: st.dataframe(df_fe, use_container_width=True)
                 
-            st.divider()
+st.divider()
 
-            # --- NUEVO: PREPARACIÓN DE ESTADO DE RESULTADOS (V2) ---
-            # 1. Calcular Costos del Sistema
-            costos_sistema = (
-                totales['Costo Retail'] + 
-                totales['Instalación'] + 
-                totales['Suministros'] + 
-                totales['Ajustes Inv'] + 
-                totales['Otros Gastos']
-            )
+            # --- NUEVO: ESTADO DE RESULTADOS CON FÓRMULAS ACTIVAS ---
             
-            # 2. Variables Manuales (Preestablecidas en 0)
-            kilometraje = 0 
+            # 1. Definir valores fijos (Datos que vienen de Python)
+            # Kilometraje y Gasto Admin inician en 0 para que tú los edites en Excel
+            kilometraje_inicial = 0 
             
-            # 3. Calcular Utilidad Operativa (Restando costos y kilometraje)
-            utilidad_operativa = total_fact - costos_sistema - kilometraje
-            margen_operativo = (utilidad_operativa / total_fact) if total_fact != 0 else 0
-
-            # 4. Construir el DataFrame Ordenado
+            # 2. Construir la estructura con FÓRMULAS (Sintaxis en Inglés para compatibilidad XML)
+            # Nota: Usamos SUM e IF porque internamente Excel lo guarda así. 
+            # Al abrirlo en tu compu, Excel lo traducirá automáticamente a SUMA y SI.
+            
             data_pnl = [
-                {"Concepto": "INGRESOS (Facturado Real)", "Monto": total_fact, "Notas": "Dato del Sistema"},
-                {"Concepto": "(-) Costo de Venta", "Monto": totales['Costo Retail'], "Notas": "Dato del Sistema"},
-                {"Concepto": "(-) Costo Instalación", "Monto": totales['Instalación'], "Notas": "Dato del Sistema"},
-                {"Concepto": "(-) Costo Suministros", "Monto": totales['Suministros'], "Notas": "Dato del Sistema"},
-                {"Concepto": "(-) Ajustes de Inventario", "Monto": totales['Ajustes Inv'], "Notas": "Dato del Sistema"},
-                {"Concepto": "(-) Otros Gastos", "Monto": totales['Otros Gastos'], "Notas": "Dato del Sistema"},
-                {"Concepto": "(-) KILOMETRAJE", "Monto": kilometraje, "Notas": "MANUAL (Ingresar costo aquí)"},
-                {"Concepto": "--------------------------------", "Monto": 0, "Notas": ""},
-                {"Concepto": "(=) UTILIDAD OPERATIVA", "Monto": utilidad_operativa, "Notas": "Ingresos - (Costos + Km)"},
-                {"Concepto": "(%) MARGEN OPERATIVO", "Monto": margen_operativo, "Notas": "Utilidad / Ingresos"},
-                {"Concepto": "", "Monto": 0, "Notas": ""},
-                {"Concepto": "(-) GASTO ADMINISTRATIVO (%)", "Monto": 0, "Notas": "MANUAL (Ingresar % aquí)"},
-                {"Concepto": "(-) Gasto Administrativo (Monto)", "Monto": 0, "Notas": "Fórmula Excel: Utilidad Op * % Admin"},
-                {"Concepto": "(=) UTILIDAD FINAL", "Monto": 0, "Notas": "Fórmula Excel: Utilidad Op - Gasto Admin"},
-                {"Concepto": "(%) MARGEN REAL FINAL", "Monto": 0, "Notas": "Fórmula Excel: Utilidad Final / Ingresos"}
+                # FILA 2 (Celda B2) -> Ingresos
+                {"Concepto": "INGRESOS (Facturado Real)", "Monto": total_fact, "Notas": "Dato Fijo (Sistema)"},
+                
+                # FILAS 3-7 (Celdas B3:B7) -> Costos del Sistema
+                {"Concepto": "(-) Costo de Venta", "Monto": totales['Costo Retail'], "Notas": "Dato Fijo (Sistema)"},
+                {"Concepto": "(-) Costo Instalación", "Monto": totales['Instalación'], "Notas": "Dato Fijo (Sistema)"},
+                {"Concepto": "(-) Costo Suministros", "Monto": totales['Suministros'], "Notas": "Dato Fijo (Sistema)"},
+                {"Concepto": "(-) Ajustes de Inventario", "Monto": totales['Ajustes Inv'], "Notas": "Dato Fijo (Sistema)"},
+                {"Concepto": "(-) Otros Gastos", "Monto": totales['Otros Gastos'], "Notas": "Dato Fijo (Sistema)"},
+                
+                # FILA 8 (Celda B8) -> Variable Manual (Kilometraje)
+                {"Concepto": "(-) KILOMETRAJE", "Monto": kilometraje_inicial, "Notas": "MANUAL (Editar en Excel)"},
+                
+                # FILA 9 (Celda B9) -> Separador
+                {"Concepto": "--------------------------------", "Monto": None, "Notas": ""},
+                
+                # FILA 10 (Celda B10) -> UTILIDAD OPERATIVA
+                # Fórmula: B2 - (Suma de B3 hasta B8)
+                {"Concepto": "(=) UTILIDAD OPERATIVA", "Monto": "=B2-SUM(B3:B8)", "Notas": "Calculado (Fórmula)"},
+                
+                # FILA 11 (Celda B11) -> MARGEN OPERATIVO
+                # Fórmula: Si Ingreso(B2) no es 0, Dividir Utilidad(B10)/Ingreso(B2)
+                {"Concepto": "(%) MARGEN OPERATIVO", "Monto": "=IF(B2<>0, B10/B2, 0)", "Notas": "Calculado (Fórmula)"},
+                
+                # FILA 12 -> Espacio
+                {"Concepto": "", "Monto": None, "Notas": ""},
+                
+                # FILA 13 (Celda B13) -> GASTO ADMIN % (Manual)
+                {"Concepto": "(-) GASTO ADMINISTRATIVO (%)", "Monto": 0, "Notas": "MANUAL (Poner % ej: 10%)"},
+                
+                # FILA 14 (Celda B14) -> GASTO ADMIN MONTO
+                # Fórmula: Utilidad Operativa(B10) * Porcentaje(B13)
+                {"Concepto": "(-) Gasto Administrativo (Monto)", "Monto": "=B10*B13", "Notas": "Calculado (Fórmula)"},
+                
+                # FILA 15 (Celda B15) -> UTILIDAD FINAL
+                # Fórmula: Utilidad Op(B10) - Gasto Admin(B14)
+                {"Concepto": "(=) UTILIDAD FINAL", "Monto": "=B10-B14", "Notas": "Calculado (Fórmula)"},
+                
+                # FILA 16 (Celda B16) -> MARGEN FINAL
+                # Fórmula: Utilidad Final(B15) / Ingreso(B2)
+                {"Concepto": "(%) MARGEN REAL FINAL", "Monto": "=IF(B2<>0, B15/B2, 0)", "Notas": "Calculado (Fórmula)"}
             ]
+            
             df_pnl_rep = pd.DataFrame(data_pnl)
 
-            # 5. Generar el Excel
+            # 3. Generar el Excel con Formatos
             buffer_proy = io.BytesIO()
             with pd.ExcelWriter(buffer_proy, engine='openpyxl') as writer:
-                # Hoja Principal: Estado de Resultados
+                # Hoja Principal
                 df_pnl_rep.to_excel(writer, sheet_name='Estado_Resultados', index=False)
                 
-                # Hoja Resumen: KPIs del Dashboard
+                # --- APLICAR FORMATOS DE EXCEL (Nice to have) ---
+                # Esto hace que se vea bonito automáticamente
+                ws = writer.sheets['Estado_Resultados']
+                
+                # Formato Porcentaje para márgenes y el input de admin
+                # B11 = Margen Op, B13 = Input %, B16 = Margen Final
+                for celda in ['B11', 'B13', 'B16']:
+                    ws[celda].number_format = '0.00%'
+                
+                # Formato Moneda para las celdas de montos (B2 hasta B10 y B14, B15)
+                for i in range(2, 11): # Filas 2 a 10
+                    ws[f'B{i}'].number_format = '#,##0.00'
+                ws['B14'].number_format = '#,##0.00'
+                ws['B15'].number_format = '#,##0.00'
+                
+                # Anchar columna A para que se lea el texto
+                ws.column_dimensions['A'].width = 35
+                ws.column_dimensions['B'].width = 15
+                
+                # --- HOJAS DE SOPORTE ---
+                # Hoja Resumen KPI (Foto del Dashboard)
                 resumen_kpi = pd.DataFrame({
                     'Concepto': ['Ingreso Total Proyecto', 'Costo Vivo (Alerta)', 'Margen Alerta', 'Margen Real (Dashboard)'],
                     'Monto': [total_ing, costo_vivo, margen_alerta, utilidad_real]
@@ -368,9 +407,9 @@ with tab_renta:
                 if not df_f.empty: df_f.to_excel(writer, sheet_name='Contabilidad_Full', index=False)
             
             st.download_button(
-                f"📥 Descargar Estado de Resultados: {', '.join(proys[:1])}...", 
+                f"📥 Descargar Estado de Resultados (Con Fórmulas)", 
                 data=buffer_proy.getvalue(), 
-                file_name=f"Estado_Resultados_{proys[0][:10]}.xlsx",
+                file_name=f"ER_{proys[0][:10]}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 # === PESTAÑA 3: PRODUCTOS (ACTUALIZADA: Métrica + Cat + Zona + Vendedor) ===
@@ -884,6 +923,7 @@ with tab_down:
         if not df_main.empty:
             perf = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index()
             st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(perf), file_name="Performance_Vendedores.xlsx")
+
 
 
 
