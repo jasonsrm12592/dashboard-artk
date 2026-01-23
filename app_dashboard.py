@@ -312,102 +312,94 @@ with tab_renta:
                 
             st.divider()
 
-            # --- NUEVO: ESTADO DE RESULTADOS CON FÓRMULAS ACTIVAS ---
+            # --- ESTADO DE RESULTADOS (V3: CON COMISIÓN VENDEDOR) ---
             
-            # 1. Definir valores fijos (Datos que vienen de Python)
-            # Kilometraje y Gasto Admin inician en 0 para que tú los edites en Excel
+            # 1. Valores Iniciales
             kilometraje_inicial = 0 
             
-            # 2. Construir la estructura con FÓRMULAS (Sintaxis en Inglés para compatibilidad XML)
-            # Nota: Usamos SUM e IF porque internamente Excel lo guarda así. 
-            # Al abrirlo en tu compu, Excel lo traducirá automáticamente a SUMA y SI.
-            
+            # 2. Construir DataFrame con Fórmulas
             data_pnl = [
-                # FILA 2 (Celda B2) -> Ingresos
+                # FILA 2: Ingresos
                 {"Concepto": "INGRESOS (Facturado Real)", "Monto": total_fact, "Notas": "Dato Fijo (Sistema)"},
                 
-                # FILAS 3-7 (Celdas B3:B7) -> Costos del Sistema
+                # FILAS 3-7: Costos Sistema
                 {"Concepto": "(-) Costo de Venta", "Monto": totales['Costo Retail'], "Notas": "Dato Fijo (Sistema)"},
                 {"Concepto": "(-) Costo Instalación", "Monto": totales['Instalación'], "Notas": "Dato Fijo (Sistema)"},
                 {"Concepto": "(-) Costo Suministros", "Monto": totales['Suministros'], "Notas": "Dato Fijo (Sistema)"},
                 {"Concepto": "(-) Ajustes de Inventario", "Monto": totales['Ajustes Inv'], "Notas": "Dato Fijo (Sistema)"},
                 {"Concepto": "(-) Otros Gastos", "Monto": totales['Otros Gastos'], "Notas": "Dato Fijo (Sistema)"},
                 
-                # FILA 8 (Celda B8) -> Variable Manual (Kilometraje)
+                # FILA 8: Manual (Km)
                 {"Concepto": "(-) KILOMETRAJE", "Monto": kilometraje_inicial, "Notas": "MANUAL (Editar en Excel)"},
                 
-                # FILA 9 (Celda B9) -> Separador
+                # FILA 9: Separador
                 {"Concepto": "--------------------------------", "Monto": None, "Notas": ""},
                 
-                # FILA 10 (Celda B10) -> UTILIDAD OPERATIVA
-                # Fórmula: B2 - (Suma de B3 hasta B8)
+                # FILA 10: Utilidad Operativa (=B2-SUM(B3:B8))
                 {"Concepto": "(=) UTILIDAD OPERATIVA", "Monto": "=B2-SUM(B3:B8)", "Notas": "Calculado (Fórmula)"},
                 
-                # FILA 11 (Celda B11) -> MARGEN OPERATIVO
-                # Fórmula: Si Ingreso(B2) no es 0, Dividir Utilidad(B10)/Ingreso(B2)
+                # FILA 11: Margen Operativo (=B10/B2)
                 {"Concepto": "(%) MARGEN OPERATIVO", "Monto": "=IF(B2<>0, B10/B2, 0)", "Notas": "Calculado (Fórmula)"},
                 
-                # FILA 12 -> Espacio
+                # FILA 12: Espacio
                 {"Concepto": "", "Monto": None, "Notas": ""},
                 
-                # FILA 13 (Celda B13) -> GASTO ADMIN % (Manual)
+                # FILA 13: Gasto Admin % (Manual)
                 {"Concepto": "(-) GASTO ADMINISTRATIVO (%)", "Monto": 0, "Notas": "MANUAL (Poner % ej: 10%)"},
                 
-                # FILA 14 (Celda B14) -> GASTO ADMIN MONTO
-                # Fórmula: Utilidad Operativa(B10) * Porcentaje(B13)
+                # FILA 14: Gasto Admin Monto (=B10*B13)
                 {"Concepto": "(-) Gasto Administrativo (Monto)", "Monto": "=B10*B13", "Notas": "Calculado (Fórmula)"},
                 
-                # FILA 15 (Celda B15) -> UTILIDAD FINAL
-                # Fórmula: Utilidad Op(B10) - Gasto Admin(B14)
+                # FILA 15: Utilidad Final (=B10-B14)
                 {"Concepto": "(=) UTILIDAD FINAL", "Monto": "=B10-B14", "Notas": "Calculado (Fórmula)"},
                 
-                # FILA 16 (Celda B16) -> MARGEN FINAL
-                # Fórmula: Utilidad Final(B15) / Ingreso(B2)
-                {"Concepto": "(%) MARGEN REAL FINAL", "Monto": "=IF(B2<>0, B15/B2, 0)", "Notas": "Calculado (Fórmula)"}
+                # FILA 16: Margen Real Final (=B15/B2)
+                {"Concepto": "(%) MARGEN REAL FINAL", "Monto": "=IF(B2<>0, B15/B2, 0)", "Notas": "Calculado (Fórmula)"},
+                
+                # --- NUEVA FILA 17: COMISIÓN VENDEDOR ---
+                # Regla: >=35% -> 12% Utilidad | >=8% -> 10% Utilidad | <8% -> 0
+                {"Concepto": "($) COMISIÓN VENDEDOR", "Monto": "=IF(B16>=0.35, B15*0.12, IF(B16>=0.08, B15*0.10, 0))", "Notas": "Calculado (Regla Margen)"}
             ]
             
             df_pnl_rep = pd.DataFrame(data_pnl)
 
-            # 3. Generar el Excel con Formatos
+            # 3. Generar Excel
             buffer_proy = io.BytesIO()
             with pd.ExcelWriter(buffer_proy, engine='openpyxl') as writer:
                 # Hoja Principal
                 df_pnl_rep.to_excel(writer, sheet_name='Estado_Resultados', index=False)
                 
-                # --- APLICAR FORMATOS DE EXCEL (Nice to have) ---
-                # Esto hace que se vea bonito automáticamente
+                # --- FORMATOS ---
                 ws = writer.sheets['Estado_Resultados']
                 
-                # Formato Porcentaje para márgenes y el input de admin
-                # B11 = Margen Op, B13 = Input %, B16 = Margen Final
+                # Porcentajes (B11, B13, B16)
                 for celda in ['B11', 'B13', 'B16']:
                     ws[celda].number_format = '0.00%'
                 
-                # Formato Moneda para las celdas de montos (B2 hasta B10 y B14, B15)
-                for i in range(2, 11): # Filas 2 a 10
+                # Moneda (B2-B10, B14-B15 y B17)
+                for i in range(2, 11): 
                     ws[f'B{i}'].number_format = '#,##0.00'
                 ws['B14'].number_format = '#,##0.00'
                 ws['B15'].number_format = '#,##0.00'
+                ws['B17'].number_format = '#,##0.00' # Nueva celda Comisión
                 
-                # Anchar columna A para que se lea el texto
+                # Estilo Visual (Ancho de columnas)
                 ws.column_dimensions['A'].width = 35
-                ws.column_dimensions['B'].width = 15
+                ws.column_dimensions['B'].width = 18
                 
-                # --- HOJAS DE SOPORTE ---
-                # Hoja Resumen KPI (Foto del Dashboard)
+                # Hojas de Soporte
                 resumen_kpi = pd.DataFrame({
                     'Concepto': ['Ingreso Total Proyecto', 'Costo Vivo (Alerta)', 'Margen Alerta', 'Margen Real (Dashboard)'],
                     'Monto': [total_ing, costo_vivo, margen_alerta, utilidad_real]
                 })
                 resumen_kpi.to_excel(writer, sheet_name='Datos_Tablero', index=False)
                 
-                # Hojas de Detalle
                 if not df_s.empty: df_s.to_excel(writer, sheet_name='Detalle_Inventario', index=False)
                 if not df_c.empty: df_c.to_excel(writer, sheet_name='Compras_Pendientes', index=False)
                 if not df_f.empty: df_f.to_excel(writer, sheet_name='Contabilidad_Full', index=False)
             
             st.download_button(
-                f"📥 Descargar Estado de Resultados (Con Fórmulas)", 
+                f"📥 Descargar ER con Comisión: {', '.join(proys[:1])}...", 
                 data=buffer_proy.getvalue(), 
                 file_name=f"ER_{proys[0][:10]}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -923,6 +915,7 @@ with tab_down:
         if not df_main.empty:
             perf = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index()
             st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(perf), file_name="Performance_Vendedores.xlsx")
+
 
 
 
