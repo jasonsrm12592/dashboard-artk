@@ -726,12 +726,12 @@ with tab_det:
                 
 # ... (después de mostrar los gráficos del cliente) ...              
 # PREPARAR DESCARGA DEL CLIENTE
-                buffer_cli = io.BytesIO()
+            buffer_cli = io.BytesIO()
                 with pd.ExcelWriter(buffer_cli, engine='openpyxl') as writer:
                     df_cl.to_excel(writer, sheet_name='Historial_Ventas', index=False)
                     if not df_cp.empty:
                         df_cp.groupby('Producto')['quantity'].sum().reset_index().to_excel(writer, sheet_name='Productos_Comprados', index=False)
-                
+                        
                 st.download_button(
                     f"📥 Descargar Historial de {cli}",
                     data=buffer_cli.getvalue(),
@@ -846,6 +846,7 @@ with tab_down:
         if not df_main.empty:
             perf = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index()
             st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(perf), file_name="Performance_Vendedores.xlsx")
+
 
 
 
