@@ -309,7 +309,32 @@ with tab_renta:
             with t2: st.dataframe(df_c, use_container_width=True)
             with t3: st.dataframe(df_f, use_container_width=True)
             with t4: st.dataframe(df_fe, use_container_width=True)
-
+                
+# ... (después de mostrar los dataframes t1, t2, t3, t4) ...
+            
+            st.divider()
+            # PREPARAR DESCARGA DEL INFORME DE PROYECTO
+            buffer_proy = io.BytesIO()
+            with pd.ExcelWriter(buffer_proy, engine='openpyxl') as writer:
+                # Hoja Resumen (KPIs)
+                resumen_kpi = pd.DataFrame({
+                    'Concepto': ['Ingreso Total', 'Costo Vivo (Alerta)', 'Margen Alerta', 'Margen Real'],
+                    'Monto': [total_ing, costo_vivo, margen_alerta, utilidad_real]
+                })
+                resumen_kpi.to_excel(writer, sheet_name='Resumen_KPI', index=False)
+                
+                # Hojas de Detalle
+                if not df_s.empty: df_s.to_excel(writer, sheet_name='Inventario', index=False)
+                if not df_c.empty: df_c.to_excel(writer, sheet_name='Compras_Pend', index=False)
+                if not df_h.empty: df_h.to_excel(writer, sheet_name='Horas', index=False)
+                if not df_f.empty: df_f.to_excel(writer, sheet_name='Contabilidad', index=False)
+            
+            st.download_button(
+                f"📥 Descargar Informe: {', '.join(proys[:2])}...", 
+                data=buffer_proy.getvalue(), 
+                file_name="Reporte_Proyecto.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 # === PESTAÑA 3: PRODUCTOS (ACTUALIZADA: Métrica + Cat + Zona + Vendedor) ===
 with tab_prod:
     df_cat = services.cargar_inventario_general()
@@ -808,4 +833,5 @@ with tab_down:
         if not df_main.empty:
             perf = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index()
             st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(perf), file_name="Performance_Vendedores.xlsx")
+
 
