@@ -310,7 +310,7 @@ with tab_renta:
             with t3: st.dataframe(df_f, use_container_width=True)
             with t4: st.dataframe(df_fe, use_container_width=True)
                 
-st.divider()
+            st.divider()
 
             # --- NUEVO: ESTADO DE RESULTADOS CON FÓRMULAS ACTIVAS ---
             
@@ -923,6 +923,7 @@ with tab_down:
         if not df_main.empty:
             perf = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index()
             st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(perf), file_name="Performance_Vendedores.xlsx")
+
 
 
 
