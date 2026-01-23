@@ -310,30 +310,69 @@ with tab_renta:
             with t3: st.dataframe(df_f, use_container_width=True)
             with t4: st.dataframe(df_fe, use_container_width=True)
                 
-# ... (después de mostrar los dataframes t1, t2, t3, t4) ...
+st.divider()
+
+            # --- NUEVO: PREPARACIÓN DE ESTADO DE RESULTADOS (V2) ---
+            # 1. Calcular Costos del Sistema
+            costos_sistema = (
+                totales['Costo Retail'] + 
+                totales['Instalación'] + 
+                totales['Suministros'] + 
+                totales['Ajustes Inv'] + 
+                totales['Otros Gastos']
+            )
             
-            st.divider()
-            # PREPARAR DESCARGA DEL INFORME DE PROYECTO
+            # 2. Variables Manuales (Preestablecidas en 0)
+            kilometraje = 0 
+            
+            # 3. Calcular Utilidad Operativa (Restando costos y kilometraje)
+            utilidad_operativa = total_fact - costos_sistema - kilometraje
+            margen_operativo = (utilidad_operativa / total_fact) if total_fact != 0 else 0
+
+            # 4. Construir el DataFrame Ordenado
+            data_pnl = [
+                {"Concepto": "INGRESOS (Facturado Real)", "Monto": total_fact, "Notas": "Dato del Sistema"},
+                {"Concepto": "(-) Costo de Venta", "Monto": totales['Costo Retail'], "Notas": "Dato del Sistema"},
+                {"Concepto": "(-) Costo Instalación", "Monto": totales['Instalación'], "Notas": "Dato del Sistema"},
+                {"Concepto": "(-) Costo Suministros", "Monto": totales['Suministros'], "Notas": "Dato del Sistema"},
+                {"Concepto": "(-) Ajustes de Inventario", "Monto": totales['Ajustes Inv'], "Notas": "Dato del Sistema"},
+                {"Concepto": "(-) Otros Gastos", "Monto": totales['Otros Gastos'], "Notas": "Dato del Sistema"},
+                {"Concepto": "(-) KILOMETRAJE", "Monto": kilometraje, "Notas": "MANUAL (Ingresar costo aquí)"},
+                {"Concepto": "--------------------------------", "Monto": 0, "Notas": ""},
+                {"Concepto": "(=) UTILIDAD OPERATIVA", "Monto": utilidad_operativa, "Notas": "Ingresos - (Costos + Km)"},
+                {"Concepto": "(%) MARGEN OPERATIVO", "Monto": margen_operativo, "Notas": "Utilidad / Ingresos"},
+                {"Concepto": "", "Monto": 0, "Notas": ""},
+                {"Concepto": "(-) GASTO ADMINISTRATIVO (%)", "Monto": 0, "Notas": "MANUAL (Ingresar % aquí)"},
+                {"Concepto": "(-) Gasto Administrativo (Monto)", "Monto": 0, "Notas": "Fórmula Excel: Utilidad Op * % Admin"},
+                {"Concepto": "(=) UTILIDAD FINAL", "Monto": 0, "Notas": "Fórmula Excel: Utilidad Op - Gasto Admin"},
+                {"Concepto": "(%) MARGEN REAL FINAL", "Monto": 0, "Notas": "Fórmula Excel: Utilidad Final / Ingresos"}
+            ]
+            df_pnl_rep = pd.DataFrame(data_pnl)
+
+            # 5. Generar el Excel
             buffer_proy = io.BytesIO()
             with pd.ExcelWriter(buffer_proy, engine='openpyxl') as writer:
-                # Hoja Resumen (KPIs)
+                # Hoja Principal: Estado de Resultados
+                df_pnl_rep.to_excel(writer, sheet_name='Estado_Resultados', index=False)
+                
+                # Hoja Resumen: KPIs del Dashboard
                 resumen_kpi = pd.DataFrame({
-                    'Concepto': ['Ingreso Total', 'Costo Vivo (Alerta)', 'Margen Alerta', 'Margen Real'],
+                    'Concepto': ['Ingreso Total Proyecto', 'Costo Vivo (Alerta)', 'Margen Alerta', 'Margen Real (Dashboard)'],
                     'Monto': [total_ing, costo_vivo, margen_alerta, utilidad_real]
                 })
-                resumen_kpi.to_excel(writer, sheet_name='Resumen_KPI', index=False)
+                resumen_kpi.to_excel(writer, sheet_name='Datos_Tablero', index=False)
                 
                 # Hojas de Detalle
-                if not df_s.empty: df_s.to_excel(writer, sheet_name='Inventario', index=False)
-                if not df_c.empty: df_c.to_excel(writer, sheet_name='Compras_Pend', index=False)
-                if not df_h.empty: df_h.to_excel(writer, sheet_name='Horas', index=False)
-                if not df_f.empty: df_f.to_excel(writer, sheet_name='Contabilidad', index=False)
+                if not df_s.empty: df_s.to_excel(writer, sheet_name='Detalle_Inventario', index=False)
+                if not df_c.empty: df_c.to_excel(writer, sheet_name='Compras_Pendientes', index=False)
+                if not df_f.empty: df_f.to_excel(writer, sheet_name='Contabilidad_Full', index=False)
             
             st.download_button(
-                f"📥 Descargar Informe: {', '.join(proys[:2])}...", 
+                f"📥 Descargar Estado de Resultados: {', '.join(proys[:1])}...", 
                 data=buffer_proy.getvalue(), 
-                file_name="Reporte_Proyecto.xlsx",
+                file_name=f"Estado_Resultados_{proys[0][:10]}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
             )
 # === PESTAÑA 3: PRODUCTOS (ACTUALIZADA: Métrica + Cat + Zona + Vendedor) ===
 with tab_prod:
@@ -846,6 +885,7 @@ with tab_down:
         if not df_main.empty:
             perf = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index()
             st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(perf), file_name="Performance_Vendedores.xlsx")
+
 
 
 
