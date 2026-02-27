@@ -85,6 +85,7 @@ def card_kpi(titulo, valor, color_class, nota="", formato="moneda"):
 
     if es_numero:
         if formato == "moneda": val_fmt = f"₡ {val_float:,.0f}"
+        elif formato == "usd": val_fmt = f"$ {val_float:,.0f}"
         elif formato == "numero": val_fmt = f"{val_float:,.0f}"
         elif formato == "percent": val_fmt = f"{val_float:.1f}%"
         else: val_fmt = str(valor)

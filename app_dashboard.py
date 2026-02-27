@@ -87,39 +87,41 @@ with tab_kpis:
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
         df_ant = df_main[df_main['invoice_date'].dt.year == (anio_sel - 1)]
         
-        venta = df_anio['Venta_Neta'].sum()
-        delta = ((venta - df_ant['Venta_Neta'].sum()) / df_ant['Venta_Neta'].sum() * 100) if df_ant['Venta_Neta'].sum() > 0 else 0
-        meta = df_metas[df_metas['Anio'] == anio_sel]['Meta'].sum()
+        venta = df_anio['Venta_Neta_USD'].sum()
+        delta = ((venta - df_ant['Venta_Neta_USD'].sum()) / df_ant['Venta_Neta_USD'].sum() * 100) if df_ant['Venta_Neta_USD'].sum() > 0 else 0
+        meta = df_metas[df_metas['Anio'] == anio_sel]['Dolares'].sum()
         
         c1, c2, c3, c4 = st.columns(4)
-        with c1: ui.card_kpi("Venta Total", venta, "border-green", f"{delta:+.1f}% vs Anterior")
-        with c2: ui.card_kpi("Meta Anual", meta, "bg-dark-blue", formato="moneda")
+        with c1: ui.card_kpi("Venta Total (USD)", venta, "border-green", f"{delta:+.1f}% vs Anterior", formato="usd")
+        with c2: ui.card_kpi("Meta Anual (USD)", meta, "bg-dark-blue", formato="usd")
         with c3: ui.card_kpi("Cumplimiento", f"{(venta/meta*100) if meta>0 else 0:.1f}%", "border-blue", formato="raw")
-        with c4: ui.card_kpi("Ticket Prom.", (venta/df_anio['name'].nunique()) if df_anio['name'].nunique()>0 else 0, "border-purple")
+        with c4: ui.card_kpi("Ticket Prom. (USD)", (venta/df_anio['name'].nunique()) if df_anio['name'].nunique()>0 else 0, "border-purple", formato="usd")
         
         st.divider()
         st.download_button("📥 Descargar", data=ui.convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'amount_untaxed_signed']]), file_name=f"Ventas_{anio_sel}.xlsx")
 
-        st.markdown(f"### 🎯 Cumplimiento de Meta ({anio_sel})")
-        v_act = df_anio.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Actual'})
-        v_meta = df_metas[df_metas['Anio'] == anio_sel].groupby('Mes_Num')['Meta'].sum().reset_index()
+        st.markdown(f"### 🎯 Cumplimiento de Meta USD ({anio_sel})")
+        v_act = df_anio.groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': 'Actual'})
+        v_meta = df_metas[df_metas['Anio'] == anio_sel].groupby('Mes_Num')['Dolares'].sum().reset_index().rename(columns={'Dolares': 'Meta'})
         df_gm = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
         df_gm['Mes'] = df_gm['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
         
         fig_m = go.Figure()
-        fig_m.add_trace(go.Bar(x=df_gm['Mes'], y=df_gm['Actual'], name='Actual', marker_color=['#2ecc71' if r>=m else '#e74c3c' for r,m in zip(df_gm['Actual'], df_gm['Meta'])]))
-        fig_m.add_trace(go.Scatter(x=df_gm['Mes'], y=df_gm['Meta'], name='Meta', line=dict(color='#f1c40f', width=3, dash='dash')))
+        fig_m.add_trace(go.Bar(x=df_gm['Mes'], y=df_gm['Actual'], name='Actual (USD)', 
+                               marker_color=['#2ecc71' if r>=m else '#e74c3c' for r,m in zip(df_gm['Actual'], df_gm['Meta'])],
+                               text=df_gm['Actual'], texttemplate='%{y:$.3s}', textposition='auto'))
+        fig_m.add_trace(go.Scatter(x=df_gm['Mes'], y=df_gm['Meta'], name='Meta (USD)', line=dict(color='#f1c40f', width=3, dash='dash')))
         st.plotly_chart(ui.config_plotly(fig_m), use_container_width=True)
 
         st.divider()
-        st.markdown(f"### 🗓️ Comparativo: {anio_sel} vs {anio_sel-1}")
-        v_ant_g = df_ant.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Anterior'})
+        st.markdown(f"### 🗓️ Comparativo USD: {anio_sel} vs {anio_sel-1}")
+        v_ant_g = df_ant.groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': 'Anterior'})
         df_gc = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_ant_g, on='Mes_Num', how='left').fillna(0)
         df_gc['Mes'] = df_gc['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
         
         fig_c = go.Figure()
-        fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Actual'], name=f'{anio_sel}', marker_color='#2980b9'))
-        fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Anterior'], name=f'{anio_sel-1}', marker_color='#95a5a6'))
+        fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Actual'], name=f'{anio_sel}', marker_color='#2980b9', text=df_gc['Actual'], texttemplate='%{y:$.3s}', textposition='auto'))
+        fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Anterior'], name=f'{anio_sel-1}', marker_color='#95a5a6', text=df_gc['Anterior'], texttemplate='%{y:$.3s}', textposition='auto'))
         st.plotly_chart(ui.config_plotly(fig_c), use_container_width=True)
 
 # --- NUEVO: GRÁFICO VENTAS SEMANA ACTUAL ---
@@ -234,43 +236,30 @@ with tab_renta:
             total_pend = df_fe['Monto_CRC'].sum() if not df_fe.empty else 0
             total_ing = total_fact + total_pend
             
-            # 2. Costo Operativo (TRANSITORIO - SOLO ALERTA)
+            # 2. Costo Vivo (TRANSITORIO + CONTABLE - PROVISIONES)
+            # El usuario solicita incluir todos los costos y restar provisiones
             costo_vivo = (
-                (df_s['Valor_Total'].sum() if not df_s.empty else 0) + # Inventario
-                totales['WIP'] + # WIP
-                (df_c['Monto_Pendiente'].sum() if not df_c.empty else 0) + # Compras Pend
-                (df_h['Costo'].sum() if not df_h.empty else 0) # Horas
-            )
-            
-            # 3. Margen Alerta (Ingreso Total - Costo Vivo)
-            margen_alerta = total_ing - costo_vivo
-            pct_alerta = (margen_alerta / total_ing * 100) if total_ing > 0 else 0
-            
-            color_alerta = "bg-alert-green" if pct_alerta > 30 else ("bg-alert-warn" if pct_alerta > 10 else "bg-alert-red")
-
-            # 4. Margen REAL (Solicitud Usuario: Total Ing - (Todos los Costos - Provisiones))
-            # Costo Real = (Retail + Suministros + Instalación + Ajustes + Otros + WIP + Inv + Compras + MO) - Provisiones
-            total_costo_real = (
                 totales['Costo Retail'] + totales['Suministros'] + totales['Instalación'] + 
                 totales['Ajustes Inv'] + totales['Otros Gastos'] + totales['WIP'] +
                 (df_s['Valor_Total'].sum() if not df_s.empty else 0) + 
                 (df_c['Monto_Pendiente'].sum() if not df_c.empty else 0) + 
                 (df_h['Costo'].sum() if not df_h.empty else 0)
             ) - totales['Provisión']
-
-            utilidad_real = total_ing - total_costo_real
-            margen_real_pct = (utilidad_real / total_ing * 100) if total_ing > 0 else 0
-            color_real = "border-green" if margen_real_pct > 20 else ("border-orange" if margen_real_pct > 0 else "border-red")
-
-            st.markdown("#### 🚦 Semáforo de Alerta Operativa")
-            st.caption("Margen calculado como: (Total Ingresos - Costos Vivos). Excluye costos contables cerrados y provisiones.")
             
-            k1, k2, k3, k4, k5 = st.columns(5)
+            # 3. Margen Actual (Ingreso Total - Costo Vivo Completo)
+            margen_actual = total_ing - costo_vivo
+            pct_actual = (margen_actual / total_ing * 100) if total_ing > 0 else 0
+            
+            color_alerta = "bg-alert-green" if pct_actual > 30 else ("bg-alert-warn" if pct_actual > 10 else "bg-alert-red")
+
+            st.markdown("#### 🚦 Semáforo de Rentabilidad Actual")
+            st.caption("Margen calculado en tiempo real: (Total Ingresos - Todos los Costos). Se incluyen costos fijos, transitorios y se restan provisiones.")
+            
+            k1, k2, k3, k4 = st.columns(4)
             with k1: ui.card_kpi("Ingreso Total Proy.", total_ing, "border-green")
-            with k2: ui.card_kpi("Costo Vivo (Alerta)", costo_vivo, "border-red")
-            with k3: ui.card_kpi("MARGEN ALERTA", margen_alerta, color_alerta)
-            with k4: ui.card_kpi("% Cobertura", pct_alerta, "border-blue", formato="percent")
-            with k5: ui.card_kpi("MARGEN REAL", margen_real_pct, color_real, formato="percent")
+            with k2: ui.card_kpi("Costo Vivo Total", costo_vivo, "border-red")
+            with k3: ui.card_kpi("MARGEN ACTUAL", margen_actual, color_alerta)
+            with k4: ui.card_kpi("% Actual", pct_actual, "border-blue", formato="percent")
             
             st.divider()
             
@@ -294,7 +283,7 @@ with tab_renta:
                 ui.card_kpi("Otros Gastos", totales['Otros Gastos'], "border-gray")
 
             with c_der:
-                st.markdown("#### ⚙️ Costos Transitorios (Vivos - ALERTA)")
+                st.markdown("#### ⚙️ Costos Transitorios (Vivos)")
                 st.caption("Estos costos SÍ restan en el semáforo.")
                 ui.card_kpi("Inventario en Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-purple")
                 ui.card_kpi("WIP (En Proceso)", totales['WIP'], "border-yellow")
@@ -304,11 +293,67 @@ with tab_renta:
                 ui.card_kpi("Provisiones (Informativo)", totales['Provisión'], "border-purple", "Reserva contable (No suma)") 
             
             st.divider()
-            t1, t2, t3, t4 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend."])
+            t1, t2, t3, t4, t5 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend.", "Historial Inv."])
             with t1: st.dataframe(df_s, use_container_width=True)
             with t2: st.dataframe(df_c, use_container_width=True)
             with t3: st.dataframe(df_f, use_container_width=True)
             with t4: st.dataframe(df_fe, use_container_width=True)
+            with t5:
+                df_ensambles, df_cust, df_post, hist_status = services.cargar_historial_inventario_proyecto(sel_ids, proys)
+                
+                if df_ensambles.empty and df_cust.empty and df_post.empty:
+                    st.info(f"No hay historial registrable o status: {hist_status}")
+                
+                st.subheader("🛠️ Ensambles (Producción)")
+                if not df_ensambles.empty:
+                    df_to_show_p = df_ensambles[['Producto', 'Ensamblado_OUT', 'Desensamblado_IN', 'Neto_Ensamblado']].rename(columns={
+                        'Ensamblado_OUT': 'Ensamblado',
+                        'Desensamblado_IN': 'Desensamblado',
+                        'Neto_Ensamblado': 'Neto Ensamblado'
+                    })
+                    
+                    def highlight_110(row):
+                        if str(row['Producto']).startswith('[110'):
+                            return ['color: lightblue']*len(row)
+                        else:
+                            return ['']*len(row)
+                            
+                    styled_df_p = df_to_show_p.style.apply(highlight_110, axis=1)
+                    
+                    st.dataframe(styled_df_p, use_container_width=True)
+                    st.download_button("📥 Descargar Ensambles", data=ui.convert_df_to_excel(df_ensambles), file_name=f"Ensambles_{proys[0][:10]}.xlsx", key=f"dwn_prod_{proys[0]}")
+                else:
+                    st.info("No hay historial de ensambles registrable.")
+                
+                st.divider()
+                
+                st.subheader("🚚 Entregas (Cliente)")
+                if not df_cust.empty:
+                    df_to_show_c = df_cust[['Producto', 'Entregado_OUT', 'Devuelto_IN', 'Neto_Entregado']].rename(columns={
+                        'Entregado_OUT': 'Entregado a Cliente',
+                        'Devuelto_IN': 'Devuelto por Cliente',
+                        'Neto_Entregado': 'Neto Entregado'
+                    })
+                    
+                    st.dataframe(df_to_show_c, use_container_width=True)
+                    st.download_button("📥 Descargar Entregas", data=ui.convert_df_to_excel(df_cust), file_name=f"Entregas_{proys[0][:10]}.xlsx", key=f"dwn_cust_{proys[0]}")
+                else:
+                    st.info("No hay historial de entregas al cliente registrable.")
+                    
+                st.divider()
+                
+                st.subheader("🔧 Ajustes Posteriores")
+                if not df_post.empty:
+                    df_to_show_post = df_post[['Producto', 'Ajuste_IN', 'Ajuste_OUT', 'Neto_Ajuste']].rename(columns={
+                        'Ajuste_IN': 'Ingreso p/Ajuste',
+                        'Ajuste_OUT': 'Salida p/Ajuste',
+                        'Neto_Ajuste': 'Ajuste Neto'
+                    })
+                    
+                    st.dataframe(df_to_show_post, use_container_width=True)
+                    st.download_button("📥 Descargar Ajustes", data=ui.convert_df_to_excel(df_post), file_name=f"Ajustes_{proys[0][:10]}.xlsx", key=f"dwn_post_{proys[0]}")
+                else:
+                    st.info("No hay ajustes posteriores registrables.")
                 
             st.divider()
 
@@ -389,8 +434,8 @@ with tab_renta:
                 
                 # Hojas de Soporte
                 resumen_kpi = pd.DataFrame({
-                    'Concepto': ['Ingreso Total Proyecto', 'Costo Vivo (Alerta)', 'Margen Alerta', 'Margen Real (Dashboard)'],
-                    'Monto': [total_ing, costo_vivo, margen_alerta, utilidad_real]
+                    'Concepto': ['Ingreso Total Proyecto', 'Costo Vivo Total', 'Margen Actual'],
+                    'Monto': [total_ing, costo_vivo, margen_actual]
                 })
                 resumen_kpi.to_excel(writer, sheet_name='Datos_Tablero', index=False)
                 
@@ -825,24 +870,24 @@ with tab_down:
         # 2. Datos de Cumplimiento de Meta (Gráfico Tab 1)
         if not df_main.empty and not df_metas.empty:
             anio_actual = datetime.now().year
-            v_act = df_main[df_main['invoice_date'].dt.year == anio_actual].groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': 'Venta_Real'})
-            v_meta = df_metas[df_metas['Anio'] == anio_actual].groupby('Mes_Num')['Meta'].sum().reset_index()
+            v_act = df_main[df_main['invoice_date'].dt.year == anio_actual].groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': 'Venta_Real'})
+            v_meta = df_metas[df_metas['Anio'] == anio_actual].groupby('Mes_Num')['Dolares'].sum().reset_index().rename(columns={'Dolares': 'Meta'})
             df_cumplimiento = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
             df_cumplimiento['Mes'] = df_cumplimiento['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
             df_cumplimiento['Cumplimiento_Pct'] = (df_cumplimiento['Venta_Real'] / df_cumplimiento['Meta'] * 100).fillna(0)
             
-            st.download_button("📥 Reporte Cumplimiento de Metas", data=ui.convert_df_to_excel(df_cumplimiento), file_name=f"Cumplimiento_Metas_{anio_actual}.xlsx")
+            st.download_button("📥 Reporte Cumplimiento de Metas (USD)", data=ui.convert_df_to_excel(df_cumplimiento), file_name=f"Cumplimiento_Metas_USD_{anio_actual}.xlsx")
 
         # 3. Datos Comparativos Anuales (Gráfico Tab 1)
         if not df_main.empty:
             anio_actual = datetime.now().year
             anio_ant = anio_actual - 1
-            v_act = df_main[df_main['invoice_date'].dt.year == anio_actual].groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': f'Venta_{anio_actual}'})
-            v_ant = df_main[df_main['invoice_date'].dt.year == anio_ant].groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': f'Venta_{anio_ant}'})
+            v_act = df_main[df_main['invoice_date'].dt.year == anio_actual].groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': f'Venta_{anio_actual}'})
+            v_ant = df_main[df_main['invoice_date'].dt.year == anio_ant].groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': f'Venta_{anio_ant}'})
             df_comp = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_ant, on='Mes_Num', how='left').fillna(0)
             df_comp['Diferencia'] = df_comp[f'Venta_{anio_actual}'] - df_comp[f'Venta_{anio_ant}']
             
-            st.download_button(f"📥 Comparativo {anio_actual} vs {anio_ant}", data=ui.convert_df_to_excel(df_comp), file_name="Comparativo_Anual.xlsx")
+            st.download_button(f"📥 Comparativo USD {anio_actual} vs {anio_ant}", data=ui.convert_df_to_excel(df_comp), file_name="Comparativo_Anual_USD.xlsx")
 
     # --- SECCIÓN 2: PRODUCTOS E INVENTARIO ---
     with col_d2:
