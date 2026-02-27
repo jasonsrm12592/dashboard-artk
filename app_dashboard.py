@@ -106,10 +106,26 @@ with tab_kpis:
         df_gm = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
         df_gm['Mes'] = df_gm['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
         
+        def lbl_meta(r):
+            act, meta = r['Actual'], r['Meta']
+            def fm(v):
+                av = abs(v)
+                if av >= 1e6: return f"${av/1e6:.1f}M"
+                elif av >= 1e3: return f"${av/1e3:.0f}k"
+                return f"${av:.0f}"
+            t = fm(act)
+            if meta > 0:
+                d = act - meta
+                s = "+" if d >= 0 else "-"
+                t += f"<br>({s}{fm(d)})"
+            return t
+            
+        df_gm['Label'] = df_gm.apply(lbl_meta, axis=1)
+        
         fig_m = go.Figure()
         fig_m.add_trace(go.Bar(x=df_gm['Mes'], y=df_gm['Actual'], name='Actual (USD)', 
                                marker_color=['#2ecc71' if r>=m else '#e74c3c' for r,m in zip(df_gm['Actual'], df_gm['Meta'])],
-                               text=df_gm['Actual'], texttemplate='%{y:$.3s}', textposition='auto'))
+                               text=df_gm['Label'], textposition='auto'))
         fig_m.add_trace(go.Scatter(x=df_gm['Mes'], y=df_gm['Meta'], name='Meta (USD)', line=dict(color='#f1c40f', width=3, dash='dash')))
         st.plotly_chart(ui.config_plotly(fig_m), use_container_width=True)
 
