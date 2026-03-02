@@ -20,6 +20,26 @@ except Exception:
 
 # --- FUNCIONES DE CARGA DE DATOS ---
 
+@st.cache_data(ttl=3600)
+def get_current_usd_rate():
+    try:
+        common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
+        uid = common.authenticate(DB, USERNAME, PASSWORD, {})
+        if not uid: return 515.0
+        models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
+        usd_curr = models.execute_kw(DB, uid, PASSWORD, 'res.currency', 'search_read', [[['name', '=', 'USD']]], {'fields': ['id']})
+        if usd_curr:
+            usd_id = usd_curr[0]['id']
+            domain_rates = [['currency_id', '=', usd_id], ['company_id', '=', COMPANY_ID]]
+            rates = models.execute_kw(DB, uid, PASSWORD, 'res.currency.rate', 'search_read', [domain_rates], {'fields': ['rate'], 'order': 'name desc', 'limit': 1})
+            if rates and rates[0]['rate'] > 0:
+                tc = 1.0 / rates[0]['rate']
+                return round(tc, 2)
+    except:
+        pass
+    return 515.0
+
+
 @st.cache_data(ttl=900) 
 def cargar_datos_generales():
     try:
