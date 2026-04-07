@@ -15,7 +15,7 @@ import ui
 st.set_page_config(
     page_title="Alrotek Monitor v1", 
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # HELPER: Gráfico de Pastel Mejorado
@@ -60,14 +60,15 @@ def create_improved_pie(df_in, col_val, col_name, title, threshold=0.02, show_pe
 ui.load_styles()
 
 # --- 5. INTERFAZ ---
+with st.sidebar:
+    st.header("⚙️ Configuración")
+    tc_odoo = services.get_current_usd_rate()
+    tc_usd = st.number_input("TC (USD -> CRC)", value=float(tc_odoo), format="%.2f")
+    st.info(f"TC VIGENTE ODOO: ₡{tc_usd:,.2f}")
+    st.divider()
+
 st.image("logo.png", width=100)
 st.title("Alrotek Monitor v1")
-
-with st.expander("⚙️ Configuración", expanded=True):
-    tc_odoo = services.get_current_usd_rate()
-    col_conf1, col_conf2 = st.columns(2)
-    with col_conf1: tc_usd = st.number_input("TC (USD -> CRC)", value=float(tc_odoo), format="%.2f")
-    with col_conf2: st.info(f"TC VIGENTE ODOO: ₡{tc_usd:,.2f}")
 
 # SE AGREGÓ 'tab_down' AL FINAL
 tab_kpis, tab_renta, tab_prod, tab_inv, tab_cx, tab_cli, tab_vend, tab_det, tab_down = st.tabs(["📊 Visión General", "📈 Rentabilidad Proyectos", "📦 Productos", "🕸️ Baja Rotación", "💰 Cartera", "👥 Segmentación", "💼 Vendedores", "🔍 Radiografía", "📥 Descargas"])
