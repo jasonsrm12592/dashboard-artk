@@ -19,7 +19,7 @@ st.set_page_config(
 )
 
 # HELPER: Gráfico de Pastel Mejorado
-def create_improved_pie(df_in, col_val, col_name, title, threshold=0.02, show_percent_only=True):
+def create_improved_pie(df_in, col_val, col_name, title, threshold=0.02, show_percent_only=True, prefix="", suffix=""):
     # Agrupar y ordenar
     df_g = df_in.groupby(col_name)[col_val].sum().reset_index().sort_values(col_val, ascending=False)
     
@@ -27,22 +27,31 @@ def create_improved_pie(df_in, col_val, col_name, title, threshold=0.02, show_pe
     total = df_g[col_val].sum()
     if total == 0: return go.Figure()
     
-    df_g['Pct'] = df_g[col_val] / total
-    
     # Agrupar menores
-    mask = df_g['Pct'] < threshold
+    mask = (df_g[col_val] / total) < threshold
     if mask.any():
         otros = df_g[mask][col_val].sum()
         df_g = df_g[~mask].copy()
         df_g = pd.concat([df_g, pd.DataFrame({col_name: ['Otros/Menores'], col_val: [otros]})], ignore_index=True)
+
+    # Recalcular porcentajes finales
+    df_g['Pct'] = (df_g[col_val] / total * 100).round(1)
+    
+    # Formatear nombres para la leyenda (Nombre - Monto (Pct%))
+    def fmt_v(v):
+        if abs(v) >= 1e6: return f"{v/1e6:.1f}M"
+        if abs(v) >= 1e3: return f"{v/1e3:.1f}k"
+        return f"{v:,.0f}"
+        
+    df_g[col_name] = df_g.apply(lambda r: f"{r[col_name]} - {prefix}{fmt_v(r[col_val])}{suffix} ({r['Pct']}%)", axis=1)
     
     # Crear gráfico
     fig = px.pie(df_g, values=col_val, names=col_name, title=title, hole=0.4)
     
-    # Configurar layout
+    # Configurar layout: Leyenda VERTICAL a la derecha
     info_mode = 'percent' if show_percent_only else 'percent+label'
     fig.update_traces(textposition='inside', textinfo=info_mode)
-    fig.update_layout(legend=dict(orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.05))
+    fig.update_layout(legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05))
     
     return fig
 
@@ -621,11 +630,11 @@ with tab_cli:
         df_c = df_main[df_main['invoice_date'].dt.year == anio_c]
         c1, c2, c3 = st.columns(3)
         with c1: 
-            st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Provincia', 'Ventas por Provincia')), use_container_width=True)
+            st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Provincia', 'Ventas por Provincia', prefix="₡")), use_container_width=True)
         with c2: 
-            st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Zona_Comercial', 'Ventas por Zona')), use_container_width=True)
+            st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Zona_Comercial', 'Ventas por Zona', prefix="₡")), use_container_width=True)
         with c3: 
-            st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Categoria_Cliente', 'Ventas por Categoría')), use_container_width=True)
+            st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Categoria_Cliente', 'Ventas por Categoría', prefix="₡")), use_container_width=True)
         st.divider()
         df_old = df_main[df_main['invoice_date'].dt.year == (anio_c - 1)]
         cli_now = set(df_c['Cliente'])
@@ -777,12 +786,18 @@ with tab_vend:
                         df_merged_brand['Marca'] = df_merged_brand['Marca'].fillna("Sin Marca")
                         
                         # Preparar datos para el pie chart usando la métrica seleccionada
-                        # Para count distinct (ID_Factura), groupby directo
                         df_pie_data = df_merged_brand.groupby('Marca')[val_col].agg(agg).reset_index()
                         
-                        # Usar el helper
-                        fig_brand = create_improved_pie(df_pie_data, val_col, 'Marca', f"Mix ({metrica_vend})")
-                        st.plotly_chart(ui.config_plotly(fig_brand), use_container_width=True)
+                        # Determinar prefijos/sufijos según métrica
+                        pre = "₡" if "Monto" in metrica_vend else ""
+                        suf = " Und" if "Cantidad" in metrica_vend else (" Docs" if "Freq" in metrica_vend else "")
+
+                        # Usar el helper con parámetros de leyenda
+                        fig_brand = create_improved_pie(df_pie_data, val_col, 'Marca', "", prefix=pre, suffix=suf)
+                        # Sobrescribir legend de ui.config_plotly para mantenerla vertical como pidió el usuario
+                        fig_brand = ui.config_plotly(fig_brand)
+                        fig_brand.update_layout(legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05))
+                        st.plotly_chart(fig_brand, use_container_width=True)
                     else:
                         st.warning("No se pudo cargar información de Marcas.")
             else:
