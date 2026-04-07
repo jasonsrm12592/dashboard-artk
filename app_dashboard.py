@@ -15,7 +15,7 @@ import ui
 st.set_page_config(
     page_title="Alrotek Monitor v1", 
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # HELPER: Gráfico de Pastel Mejorado
@@ -56,22 +56,20 @@ def create_improved_pie(df_in, col_val, col_name, title, threshold=0.02, show_pe
     return fig
 
 
+# --- 1.2 INICIALIZACIÓN DE ESTADO ---
+if 'tc_usd' not in st.session_state:
+    st.session_state.tc_usd = float(services.get_current_usd_rate())
+tc_usd = st.session_state.tc_usd
+
 # Cargar estilos
 ui.load_styles()
 
 # --- 5. INTERFAZ ---
-with st.sidebar:
-    st.header("⚙️ Configuración")
-    tc_odoo = services.get_current_usd_rate()
-    tc_usd = st.number_input("TC (USD -> CRC)", value=float(tc_odoo), format="%.2f")
-    st.info(f"TC VIGENTE ODOO: ₡{tc_usd:,.2f}")
-    st.divider()
-
 st.image("logo.png", width=100)
 st.title("Alrotek Monitor v1")
 
-# SE AGREGÓ 'tab_down' AL FINAL
-tab_kpis, tab_renta, tab_prod, tab_inv, tab_cx, tab_cli, tab_vend, tab_det, tab_down = st.tabs(["📊 Visión General", "📈 Rentabilidad Proyectos", "📦 Productos", "🕸️ Baja Rotación", "💰 Cartera", "👥 Segmentación", "💼 Vendedores", "🔍 Radiografía", "📥 Descargas"])
+# SE AGREGÓ 'tab_config' AL FINAL
+tab_kpis, tab_renta, tab_prod, tab_inv, tab_cx, tab_cli, tab_vend, tab_det, tab_down, tab_config = st.tabs(["📊 Visión General", "📈 Rentabilidad Proyectos", "📦 Productos", "🕸️ Baja Rotación", "💰 Cartera", "👥 Segmentación", "💼 Vendedores", "🔍 Radiografía", "📥 Descargas", "⚙️ Config"])
 
 with st.spinner('Cargando...'):
     df_main = services.cargar_datos_generales()
@@ -847,6 +845,7 @@ with tab_vend:
                 else:
                     st.info("Sin datos de clientes para este periodo.")
 
+
 # === PESTAÑA 8: RADIOGRAFÍA ===
 with tab_det:
     if not df_main.empty:
@@ -1049,6 +1048,18 @@ with tab_down:
         if not df_main.empty:
             perf = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index()
             st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(perf), file_name="Performance_Vendedores.xlsx")
+
+# === PESTAÑA 10: CONFIGURACIÓN ===
+with tab_config:
+    st.header("⚙️ Configuración Global")
+    st.markdown("Ajusta los parámetros que afectan a todo el dashboard.")
+    
+    st.subheader("💹 Moneda y Tipo de Cambio")
+    # El valor se sincroniza automáticamente con st.session_state.tc_usd por el 'key'
+    st.number_input("Tipo de Cambio (USD -> CRC)", key="tc_usd", format="%.2f")
+    
+    st.info(f"💡 **Dato de Odoo**: El tipo de cambio actual en el sistema es ₡{services.get_current_usd_rate():,.2f}")
+    st.caption("Nota: Cambiar este valor actualizará todos los cálculos de conversión a dólares en las demás pestañas.")
 
 
 
