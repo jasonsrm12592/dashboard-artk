@@ -1,4 +1,4 @@
-# ui.py
+# ui.py v1.0.2 (Forced Reload)
 import streamlit as st
 import pandas as pd
 import io
@@ -44,6 +44,7 @@ def load_styles():
             font-weight: 700;
             color: #2c3e50;
             margin-bottom: 4px;
+            font-weight: 700;
         }
         .kpi-note {
             font-size: 0.7rem;
@@ -74,6 +75,17 @@ def convert_df_to_excel(df, sheet_name='Datos'):
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
     return output.getvalue()
+
+def download_button(df, filename, label="📥 Descargar Excel"):
+    """Genera un botón de descarga para un DataFrame en formato Excel."""
+    if df is not None and not df.empty:
+        buffer = convert_df_to_excel(df)
+        st.download_button(
+            label=label,
+            data=buffer,
+            file_name=f"{filename}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 def card_kpi(titulo, valor, color_class, nota="", formato="moneda"):
     try:
@@ -110,14 +122,3 @@ def config_plotly(fig):
         legend=dict(orientation="h", y=1.1)
     )
     return fig
-
-def download_button(df, filename, label="📥 Descargar Excel"):
-    """Genera un botón de descarga para un DataFrame en formato Excel."""
-    if df is not None and not df.empty:
-        buffer = convert_df_to_excel(df)
-        st.download_button(
-            label=label,
-            data=buffer,
-            file_name=f"{filename}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
