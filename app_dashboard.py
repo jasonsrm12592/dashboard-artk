@@ -543,10 +543,11 @@ with tab_prod:
             ui.download_button(grp_tipo, "Mix_Tipo_Producto")
         
         # Top 10 Global
-        grp_top = df_p.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
+        grp_top_full = df_p.groupby('Producto')[col_calc].agg(agg_func).sort_values(ascending=False).reset_index()
+        grp_top_show = grp_top_full.head(10).sort_values(col_calc) # Volvemos a ordenar para que tail/head se vea bien en H bar
         with c_m2: 
-            st.plotly_chart(ui.config_plotly(px.bar(grp_top, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, title=f"Top 10 Global ({tipo_ver})")), use_container_width=True)
-            ui.download_button(grp_top, "Top_10_Productos_Global")
+            st.plotly_chart(ui.config_plotly(px.bar(grp_top_show, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, title=f"Top 10 Global ({tipo_ver})")), use_container_width=True)
+            ui.download_button(grp_top_full, "Listado_Productos_Global")
 
         # --- PREPARACIÓN DE DATOS DETALLADOS ---
         if not df_main.empty:
@@ -566,13 +567,13 @@ with tab_prod:
                 cat_sel = st.selectbox("Filtrar Categoría:", cats, key="prod_cat_filter")
             
             with c_cat2:
-                df_cf = df_merged[df_merged['Categoria_Cliente'] == cat_sel]
-                if not df_cf.empty:
-                    top_cat = df_cf.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
-                    fig_cat = px.bar(top_cat, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
-                                     title=f"Top Productos: {cat_sel}", color_discrete_sequence=['#8e44ad']) # Morado
+                df_cf_full = df_cf.groupby('Producto')[col_calc].agg(agg_func).sort_values(ascending=False).reset_index()
+                if not df_cf_full.empty:
+                    top_cat_show = df_cf_full.head(10).sort_values(col_calc)
+                    fig_cat = px.bar(top_cat_show, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
+                                     title=f"Top Productos: {cat_sel}", color_discrete_sequence=['#8e44ad'])
                     st.plotly_chart(ui.config_plotly(fig_cat), use_container_width=True)
-                    ui.download_button(top_cat, f"Top_Productos_{cat_sel}")
+                    ui.download_button(df_cf_full, f"Productos_{cat_sel}")
                 else:
                     st.info("Sin datos.")
 
@@ -586,13 +587,13 @@ with tab_prod:
                 zona_sel = st.selectbox("Filtrar Zona:", zonas, key="prod_zona_filter")
             
             with c_zon2:
-                df_zf = df_merged[df_merged['Zona_Comercial'] == zona_sel]
-                if not df_zf.empty:
-                    top_zona = df_zf.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
-                    fig_zona = px.bar(top_zona, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
-                                     title=f"Top Productos: {zona_sel}", color_discrete_sequence=['#16a085']) # Teal/Verde
+                df_zf_full = df_zf.groupby('Producto')[col_calc].agg(agg_func).sort_values(ascending=False).reset_index()
+                if not df_zf_full.empty:
+                    top_zona_show = df_zf_full.head(10).sort_values(col_calc)
+                    fig_zona = px.bar(top_zona_show, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
+                                     title=f"Top Productos: {zona_sel}", color_discrete_sequence=['#16a085'])
                     st.plotly_chart(ui.config_plotly(fig_zona), use_container_width=True)
-                    ui.download_button(top_zona, f"Top_Productos_{zona_sel}")
+                    ui.download_button(df_zf_full, f"Productos_{zona_sel}")
                 else:
                     st.info("Sin datos.")
 
@@ -606,13 +607,13 @@ with tab_prod:
                 vend_sel = st.selectbox("Filtrar Vendedor:", vendedores, key="prod_vend_filter")
             
             with c_ven2:
-                df_vf = df_merged[df_merged['Vendedor'] == vend_sel]
-                if not df_vf.empty:
-                    top_vend = df_vf.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
-                    fig_vend = px.bar(top_vend, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
-                                     title=f"Top Productos: {vend_sel}", color_discrete_sequence=['#d35400']) # Naranja Oscuro
+                df_vf_full = df_vf.groupby('Producto')[col_calc].agg(agg_func).sort_values(ascending=False).reset_index()
+                if not df_vf_full.empty:
+                    top_vend_show = df_vf_full.head(10).sort_values(col_calc)
+                    fig_vend = px.bar(top_vend_show, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
+                                     title=f"Top Productos: {vend_sel}", color_discrete_sequence=['#d35400'])
                     st.plotly_chart(ui.config_plotly(fig_vend), use_container_width=True)
-                    ui.download_button(top_vend, f"Top_Productos_Vendedor_{vend_sel}")
+                    ui.download_button(df_vf_full, f"Productos_Vendedor_{vend_sel}")
                 else:
                     st.info("Sin datos.")
             
@@ -651,9 +652,9 @@ with tab_cx:
             st.plotly_chart(ui.config_plotly(px.bar(df_b, x='Antiguedad', y='amount_residual', text_auto='.2s', color='Antiguedad')), use_container_width=True)
             ui.download_button(df_b, "Antiguedad_Cartera")
         with c_t:
-            df_top_deuda = df_cx.groupby('Cliente')['amount_residual'].sum().sort_values(ascending=False).head(10).reset_index()
-            st.dataframe(df_top_deuda, use_container_width=True)
-            ui.download_button(df_top_deuda, "Top_Clientes_Deuda")
+            df_full_deuda = df_cx.groupby('Cliente')['amount_residual'].sum().sort_values(ascending=False).reset_index()
+            st.dataframe(df_full_deuda.head(15), use_container_width=True)
+            ui.download_button(df_full_deuda, "Deuda_Cartera_Completa", "📥 Descargar Cartera Completa")
 
 # === PESTAÑA 6: SEGMENTACIÓN ===
 with tab_cli:
@@ -684,15 +685,17 @@ with tab_cli:
         c_top, c_lost = st.columns(2)
         with c_top:
             st.subheader("Top Clientes")
-            df_top = df_c.groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
-            st.plotly_chart(ui.config_plotly(px.bar(df_top, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s')), use_container_width=True)
-            ui.download_button(df_top, f"Top_Clientes_{anio_c}")
+            df_top_clis_full = df_c.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
+            df_top_clis_show = df_top_clis_full.head(10).sort_values('Venta_Neta')
+            st.plotly_chart(ui.config_plotly(px.bar(df_top_clis_show, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s')), use_container_width=True)
+            ui.download_button(df_top_clis_full, f"Listado_Clientes_{anio_c}")
         with c_lost:
             st.subheader("Oportunidad (Perdidos)")
             if perdidos:
-                df_l = df_old[df_old['Cliente'].isin(perdidos)].groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
-                st.plotly_chart(ui.config_plotly(px.bar(df_l, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
-                ui.download_button(df_l, f"Clientes_Perdidos_{anio_c}")
+                df_l_full = df_old[df_old['Cliente'].isin(perdidos)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
+                df_l_show = df_l_full.head(10).sort_values('Venta_Neta')
+                st.plotly_chart(ui.config_plotly(px.bar(df_l_show, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
+                ui.download_button(df_l_full, f"Clientes_Perdidos_Full_{anio_c}")
 
         st.divider()
         
@@ -784,15 +787,17 @@ with tab_vend:
         with c_v1:
             st.subheader("Mejores Clientes")
             if not df_v.empty:
-                df_best = df_v.groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
-                st.plotly_chart(ui.config_plotly(px.bar(df_best, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s')), use_container_width=True)
-                ui.download_button(df_best, f"Mejores_Clientes_{vend}")
+                df_best_full = df_v.groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
+                df_best_show = df_best_full.head(10).sort_values('Venta_Neta')
+                st.plotly_chart(ui.config_plotly(px.bar(df_best_show, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s')), use_container_width=True)
+                ui.download_button(df_best_full, f"Ventas_por_Cliente_{vend}")
         with c_v2:
             st.subheader("Cartera Perdida")
             if perdidos_v:
-                df_lst = df_v_old[df_v_old['Cliente'].isin(perdidos_v)].groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
-                st.plotly_chart(ui.config_plotly(px.bar(df_lst, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
-                ui.download_button(df_lst, f"Cartera_Perdida_{vend}")
+                df_lst_full = df_v_old[df_v_old['Cliente'].isin(perdidos_v)].groupby('Cliente')['Venta_Neta'].sum().sort_values(ascending=False).reset_index()
+                df_lst_show = df_lst_full.head(10).sort_values('Venta_Neta')
+                st.plotly_chart(ui.config_plotly(px.bar(df_lst_show, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
+                ui.download_button(df_lst_full, f"Cartera_Perdida_Full_{vend}")
 
         st.divider()
         
@@ -818,14 +823,13 @@ with tab_vend:
                 
                 with c_top10:
                     st.subheader(f"🏆 Top 10 Productos ({metrica_vend})")
-                    top_prods = df_prod_vend.groupby('Producto')[val_col].agg(agg).sort_values(ascending=True).tail(10).reset_index() # Sort Ascending for Horizontal Bar to put max at top? No, plotly needs max at bottom for H bar usually? Let's stick to standard logic: tail(10) gets biggest.
-                    # Usually for barh, y-axis order: bottom to top. 
-                    
-                    fig_vp = px.bar(top_prods, x=val_col, y='Producto', orientation='h', text_auto=fmt, 
+                    prods_full = df_prod_vend.groupby('Producto')[val_col].agg(agg).sort_values(ascending=False).reset_index()
+                    prods_show = prods_full.head(10).sort_values(val_col)
+                    fig_vp = px.bar(prods_show, x=val_col, y='Producto', orientation='h', text_auto=fmt, 
                                     title=f"Top Productos")
                     fig_vp.update_traces(marker_color='#27ae60')
                     st.plotly_chart(ui.config_plotly(fig_vp), use_container_width=True)
-                    ui.download_button(top_prods, f"Productos_{vend}")
+                    ui.download_button(prods_full, f"Listado_Productos_{vend}")
                 
                 with c_brand:
                     st.subheader(f"🥧 Mix por Marca ({metrica_vend})")
