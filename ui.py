@@ -110,3 +110,14 @@ def config_plotly(fig):
         legend=dict(orientation="h", y=1.1)
     )
     return fig
+
+def download_button(df, filename, label="📥 Descargar Excel"):
+    """Genera un botón de descarga para un DataFrame en formato Excel."""
+    if df is not None and not df.empty:
+        buffer = convert_df_to_excel(df)
+        st.download_button(
+            label=label,
+            data=buffer,
+            file_name=f"{filename}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )

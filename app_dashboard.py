@@ -69,7 +69,19 @@ st.image("logo.png", width=100)
 st.title("Alrotek Monitor v1")
 
 # SE AGREGÓ 'tab_config' AL FINAL
-tab_kpis, tab_renta, tab_prod, tab_inv, tab_cx, tab_cli, tab_vend, tab_det, tab_down, tab_config = st.tabs(["📊 Visión General", "📈 Rentabilidad Proyectos", "📦 Productos", "🕸️ Baja Rotación", "💰 Cartera", "👥 Segmentación", "💼 Vendedores", "🔍 Radiografía", "📥 Descargas", "⚙️ Config"])
+tab_kpis, tab_renta, tab_prod, tab_inv, tab_cx, tab_cli, tab_vend, tab_det, tab_config = st.tabs(["📊 Visión General", "📈 Rentabilidad Proyectos", "📦 Productos", "🕸️ Baja Rotación", "💰 Cartera", "👥 Segmentación", "💼 Vendedores", "🔍 Radiografía", "⚙️ Config"])
+
+# === PESTAÑA: CONFIGURACIÓN (REUBICADA AL INICIO DE LA LÓGICA) ===
+with tab_config:
+    st.header("⚙️ Configuración Global")
+    st.markdown("Ajusta los parámetros que afectan a todo el dashboard.")
+    
+    st.subheader("💹 Moneda y Tipo de Cambio")
+    # El valor se sincroniza automáticamente con st.session_state.tc_usd por el 'key'
+    st.number_input("Tipo de Cambio (USD -> CRC)", key="tc_usd", format="%.2f")
+    
+    st.info(f"💡 **Dato de Odoo**: El tipo de cambio actual en el sistema es ₡{services.get_current_usd_rate():,.2f}")
+    st.caption("Nota: Cambiar este valor actualizará todos los cálculos de conversión a dólares en las demás pestañas.")
 
 with st.spinner('Cargando...'):
     df_main = services.cargar_datos_generales()
@@ -107,7 +119,6 @@ with tab_kpis:
         with c4: ui.card_kpi("Ticket Prom. (USD)", (venta/df_anio['name'].nunique()) if df_anio['name'].nunique()>0 else 0, "border-purple", formato="usd")
         
         st.divider()
-        st.download_button("📥 Descargar", data=ui.convert_df_to_excel(df_anio[['invoice_date', 'name', 'Cliente', 'amount_untaxed_signed']]), file_name=f"Ventas_{anio_sel}.xlsx")
 
         st.markdown(f"### 🎯 Cumplimiento de Meta USD ({anio_sel})")
         v_act = df_anio.groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': 'Actual'})
@@ -137,6 +148,7 @@ with tab_kpis:
                                text=df_gm['Label'], textposition='auto'))
         fig_m.add_trace(go.Scatter(x=df_gm['Mes'], y=df_gm['Meta'], name='Meta (USD)', line=dict(color='#f1c40f', width=3, dash='dash')))
         st.plotly_chart(ui.config_plotly(fig_m), use_container_width=True)
+        ui.download_button(df_gm, f"Metas_{anio_sel}", "📥 Descargar Datos de Metas")
 
         st.divider()
         st.markdown(f"### 🗓️ Comparativo USD: {anio_sel} vs {anio_sel-1}")
@@ -148,6 +160,7 @@ with tab_kpis:
         fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Actual'], name=f'{anio_sel}', marker_color='#2980b9', text=df_gc['Actual'], texttemplate='%{y:$.3s}', textposition='auto'))
         fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Anterior'], name=f'{anio_sel-1}', marker_color='#95a5a6', text=df_gc['Anterior'], texttemplate='%{y:$.3s}', textposition='auto'))
         st.plotly_chart(ui.config_plotly(fig_c), use_container_width=True)
+        ui.download_button(df_gc, f"Comparativo_{anio_sel}_vs_{anio_sel-1}", "📥 Descargar Comparativo Anual")
 
 # --- NUEVO: GRÁFICO VENTAS SEMANA ACTUAL ---
         st.divider()
@@ -177,6 +190,7 @@ with tab_kpis:
                            title=f"Semana del {inicio_semana.strftime('%d/%m')} al {fin_semana.strftime('%d/%m')}")
             fig_w.update_traces(marker_color='#1abc9c') # Color cian para diferenciar
             st.plotly_chart(ui.config_plotly(fig_w), use_container_width=True)
+            ui.download_button(v_semana, "Ventas_Semana_Actual", "📥 Descargar Ventas Semana")
         else:
             st.info(f"💤 No hay ventas registradas aún en la semana del {inicio_semana.strftime('%d/%m')}.")
         
@@ -214,6 +228,7 @@ with tab_kpis:
                 fig_mix.update_traces(textposition='inside', textfont_size=10)
                 
                 st.plotly_chart(ui.config_plotly(fig_mix), use_container_width=True)
+                ui.download_button(df_grp, f"Mix_Plan_{anio_sel}", "📥 Descargar Datos del Mix")
        
         with c_top:
             st.subheader("🏆 Top Vendedores")
@@ -228,6 +243,7 @@ with tab_kpis:
             
             r_fin['T'] = r_fin.apply(txt, axis=1)
             st.plotly_chart(ui.config_plotly(go.Figure(go.Bar(x=r_fin.sort_values('Venta_Neta').tail(20)['Venta_Neta'], y=r_fin.sort_values('Venta_Neta').tail(20)['Vendedor'], orientation='h', text=r_fin.sort_values('Venta_Neta').tail(20)['T'], textposition='auto', marker_color='#2ecc71'))), use_container_width=True)
+            ui.download_button(r_fin, "Ranking_Vendedores", "📥 Descargar Ranking")
 
 # === PESTAÑA 2: PROYECTOS (ESTRUCTURA v10.7) ===
 with tab_renta:
@@ -319,10 +335,18 @@ with tab_renta:
             
             st.divider()
             t1, t2, t3, t4, t5 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend.", "Historial Inv."])
-            with t1: st.dataframe(df_s, use_container_width=True)
-            with t2: st.dataframe(df_c, use_container_width=True)
-            with t3: st.dataframe(df_f, use_container_width=True)
-            with t4: st.dataframe(df_fe, use_container_width=True)
+            with t1: 
+                st.dataframe(df_s, use_container_width=True)
+                ui.download_button(df_s, "Inventario_en_Sitio", "📥 Descargar Inventario")
+            with t2: 
+                st.dataframe(df_c, use_container_width=True)
+                ui.download_button(df_c, "Compras_Pendientes_Proyecto", "📥 Descargar Compras")
+            with t3: 
+                st.dataframe(df_f, use_container_width=True)
+                ui.download_button(df_f, "Contabilidad_Proyecto", "📥 Descargar Contabilidad")
+            with t4: 
+                st.dataframe(df_fe, use_container_width=True)
+                ui.download_button(df_fe, "Facturacion_Pendiente", "📥 Descargar Facturacion")
             with t5:
                 df_ensambles, df_cust, df_post, hist_status = services.cargar_historial_inventario_proyecto(sel_ids, proys)
                 
@@ -516,11 +540,13 @@ with tab_prod:
                              height=300)
             fig_pie.update_layout(title_pad=dict(b=20), margin=dict(t=50, b=10, l=10, r=10))
             st.plotly_chart(ui.config_plotly(fig_pie), use_container_width=True)
+            ui.download_button(grp_tipo, "Mix_Tipo_Producto")
         
         # Top 10 Global
         grp_top = df_p.groupby('Producto')[col_calc].agg(agg_func).sort_values().tail(10).reset_index()
         with c_m2: 
             st.plotly_chart(ui.config_plotly(px.bar(grp_top, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, title=f"Top 10 Global ({tipo_ver})")), use_container_width=True)
+            ui.download_button(grp_top, "Top_10_Productos_Global")
 
         # --- PREPARACIÓN DE DATOS DETALLADOS ---
         if not df_main.empty:
@@ -546,6 +572,7 @@ with tab_prod:
                     fig_cat = px.bar(top_cat, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
                                      title=f"Top Productos: {cat_sel}", color_discrete_sequence=['#8e44ad']) # Morado
                     st.plotly_chart(ui.config_plotly(fig_cat), use_container_width=True)
+                    ui.download_button(top_cat, f"Top_Productos_{cat_sel}")
                 else:
                     st.info("Sin datos.")
 
@@ -565,6 +592,7 @@ with tab_prod:
                     fig_zona = px.bar(top_zona, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
                                      title=f"Top Productos: {zona_sel}", color_discrete_sequence=['#16a085']) # Teal/Verde
                     st.plotly_chart(ui.config_plotly(fig_zona), use_container_width=True)
+                    ui.download_button(top_zona, f"Top_Productos_{zona_sel}")
                 else:
                     st.info("Sin datos.")
 
@@ -584,6 +612,7 @@ with tab_prod:
                     fig_vend = px.bar(top_vend, x=col_calc, y='Producto', orientation='h', text_auto=fmt_text, 
                                      title=f"Top Productos: {vend_sel}", color_discrete_sequence=['#d35400']) # Naranja Oscuro
                     st.plotly_chart(ui.config_plotly(fig_vend), use_container_width=True)
+                    ui.download_button(top_vend, f"Top_Productos_Vendedor_{vend_sel}")
                 else:
                     st.info("Sin datos.")
             
@@ -603,6 +632,7 @@ with tab_inv:
             with c2: ui.card_kpi("Total Items", len(df_h), "border-gray", formato="numero")
             with c3: ui.card_kpi("Items Críticos", len(df_show), "border-orange", formato="numero")
             st.dataframe(df_show[['Producto','Ubicacion','quantity','Dias_Sin_Salida','Valor']], use_container_width=True)
+            ui.download_button(df_show, "Inventario_Baja_Rotacion", "📥 Descargar Inventario Inactivo")
         else: st.info(status)
 
 # === PESTAÑA 5: CARTERA ===
@@ -619,8 +649,11 @@ with tab_cx:
         with c_g:
             df_b = df_cx.groupby('Antiguedad')['amount_residual'].sum().reset_index()
             st.plotly_chart(ui.config_plotly(px.bar(df_b, x='Antiguedad', y='amount_residual', text_auto='.2s', color='Antiguedad')), use_container_width=True)
+            ui.download_button(df_b, "Antiguedad_Cartera")
         with c_t:
-            st.dataframe(df_cx.groupby('Cliente')['amount_residual'].sum().sort_values(ascending=False).head(10), use_container_width=True)
+            df_top_deuda = df_cx.groupby('Cliente')['amount_residual'].sum().sort_values(ascending=False).head(10).reset_index()
+            st.dataframe(df_top_deuda, use_container_width=True)
+            ui.download_button(df_top_deuda, "Top_Clientes_Deuda")
 
 # === PESTAÑA 6: SEGMENTACIÓN ===
 with tab_cli:
@@ -630,10 +663,13 @@ with tab_cli:
         c1, c2, c3 = st.columns(3)
         with c1: 
             st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Provincia', 'Ventas por Provincia', prefix="₡")), use_container_width=True)
+            ui.download_button(df_c.groupby('Provincia')['Venta_Neta'].sum().reset_index(), f"Ventas_Provincia_{anio_c}")
         with c2: 
             st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Zona_Comercial', 'Ventas por Zona', prefix="₡")), use_container_width=True)
+            ui.download_button(df_c.groupby('Zona_Comercial')['Venta_Neta'].sum().reset_index(), f"Ventas_Zona_{anio_c}")
         with c3: 
             st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Categoria_Cliente', 'Ventas por Categoría', prefix="₡")), use_container_width=True)
+            ui.download_button(df_c.groupby('Categoria_Cliente')['Venta_Neta'].sum().reset_index(), f"Ventas_Categoria_{anio_c}")
         st.divider()
         df_old = df_main[df_main['invoice_date'].dt.year == (anio_c - 1)]
         cli_now = set(df_c['Cliente'])
@@ -650,11 +686,13 @@ with tab_cli:
             st.subheader("Top Clientes")
             df_top = df_c.groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
             st.plotly_chart(ui.config_plotly(px.bar(df_top, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s')), use_container_width=True)
+            ui.download_button(df_top, f"Top_Clientes_{anio_c}")
         with c_lost:
             st.subheader("Oportunidad (Perdidos)")
             if perdidos:
                 df_l = df_old[df_old['Cliente'].isin(perdidos)].groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                 st.plotly_chart(ui.config_plotly(px.bar(df_l, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
+                ui.download_button(df_l, f"Clientes_Perdidos_{anio_c}")
 
         st.divider()
         
@@ -703,6 +741,7 @@ with tab_cli:
                         'Venta_Neta': '₡{:,.0f}'
                     }), use_container_width=True, height=300
                 )
+                ui.download_button(alertas[['Cliente', 'Ciclo_Habitual', 'Dias_Sin_Comprar', 'Venta_Neta']], "Clientes_en_Riesgo")
         else:
             st.success("✅ No se detectan clientes en riesgo de fuga inminente basado en sus ciclos de compra.")
 
@@ -747,11 +786,13 @@ with tab_vend:
             if not df_v.empty:
                 df_best = df_v.groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                 st.plotly_chart(ui.config_plotly(px.bar(df_best, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s')), use_container_width=True)
+                ui.download_button(df_best, f"Mejores_Clientes_{vend}")
         with c_v2:
             st.subheader("Cartera Perdida")
             if perdidos_v:
                 df_lst = df_v_old[df_v_old['Cliente'].isin(perdidos_v)].groupby('Cliente')['Venta_Neta'].sum().sort_values().tail(10).reset_index()
                 st.plotly_chart(ui.config_plotly(px.bar(df_lst, x='Venta_Neta', y='Cliente', orientation='h', text_auto='.2s', color_discrete_sequence=['#e74c3c'])), use_container_width=True)
+                ui.download_button(df_lst, f"Cartera_Perdida_{vend}")
 
         st.divider()
         
@@ -784,6 +825,7 @@ with tab_vend:
                                     title=f"Top Productos")
                     fig_vp.update_traces(marker_color='#27ae60')
                     st.plotly_chart(ui.config_plotly(fig_vp), use_container_width=True)
+                    ui.download_button(top_prods, f"Productos_{vend}")
                 
                 with c_brand:
                     st.subheader(f"🥧 Mix por Marca ({metrica_vend})")
@@ -806,6 +848,7 @@ with tab_vend:
                         fig_brand = ui.config_plotly(fig_brand)
                         fig_brand.update_layout(legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05))
                         st.plotly_chart(fig_brand, use_container_width=True)
+                        ui.download_button(df_pie_data, f"Mix_Marca_{vend}")
                     else:
                         st.warning("No se pudo cargar información de Marcas.")
             else:
@@ -834,6 +877,7 @@ with tab_vend:
                 
                 fig_trend.update_layout(height=350, margin=dict(t=30, b=30))
                 st.plotly_chart(ui.config_plotly(fig_trend), use_container_width=True)
+                ui.download_button(df_trend_all, f"Trend_YoY_{vend}")
                 
             with c_cat_v:
                 st.subheader("👥 Mix por Categoría de Cliente")
@@ -842,6 +886,7 @@ with tab_vend:
                     fig_cat_v = ui.config_plotly(fig_cat_v)
                     fig_cat_v.update_layout(legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05))
                     st.plotly_chart(fig_cat_v, use_container_width=True)
+                    ui.download_button(df_v.groupby('Categoria_Cliente')['Venta_Neta'].sum().reset_index(), f"Mix_Cat_{vend}")
                 else:
                     st.info("Sin datos de clientes para este periodo.")
 
@@ -939,127 +984,6 @@ with tab_det:
                 data=buffer_cli.getvalue(),
                 file_name=f"Historial_{cli[:15]}.xlsx"
             )
-# === PESTAÑA 9: CENTRO DE DESCARGAS (ACTUALIZADO) ===
-with tab_down:
-    st.header("📥 Centro de Descargas")
-    st.markdown("Descarga aquí los datos consolidados que alimentan los gráficos de la aplicación.")
-    
-    col_d1, col_d2 = st.columns(2)
-    
-    # --- SECCIÓN 1: VENTAS Y OBJETIVOS ---
-    with col_d1:
-        st.subheader("📊 Ventas y Metas")
-        
-        # 1. Ventas Generales (Detalle Facturas)
-        if not df_main.empty:
-            buffer_main = ui.convert_df_to_excel(df_main[['invoice_date', 'name', 'Cliente', 'Vendedor', 'Venta_Neta', 'Provincia', 'Zona_Comercial', 'Categoria_Cliente']], "Ventas_General")
-            st.download_button("📥 Histórico de Ventas (Completo)", data=buffer_main, file_name="Ventas_Generales_Alrotek.xlsx")
-
-        # 2. Datos de Cumplimiento de Meta (Gráfico Tab 1)
-        if not df_main.empty and not df_metas.empty:
-            anio_actual = datetime.now().year
-            v_act = df_main[df_main['invoice_date'].dt.year == anio_actual].groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': 'Venta_Real'})
-            v_meta = df_metas[df_metas['Anio'] == anio_actual].groupby('Mes_Num')['Dolares'].sum().reset_index().rename(columns={'Dolares': 'Meta'})
-            df_cumplimiento = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
-            df_cumplimiento['Mes'] = df_cumplimiento['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
-            df_cumplimiento['Cumplimiento_Pct'] = (df_cumplimiento['Venta_Real'] / df_cumplimiento['Meta'] * 100).fillna(0)
-            
-            st.download_button("📥 Reporte Cumplimiento de Metas (USD)", data=ui.convert_df_to_excel(df_cumplimiento), file_name=f"Cumplimiento_Metas_USD_{anio_actual}.xlsx")
-
-        # 3. Datos Comparativos Anuales (Gráfico Tab 1)
-        if not df_main.empty:
-            anio_actual = datetime.now().year
-            anio_ant = anio_actual - 1
-            v_act = df_main[df_main['invoice_date'].dt.year == anio_actual].groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': f'Venta_{anio_actual}'})
-            v_ant = df_main[df_main['invoice_date'].dt.year == anio_ant].groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': f'Venta_{anio_ant}'})
-            df_comp = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_ant, on='Mes_Num', how='left').fillna(0)
-            df_comp['Diferencia'] = df_comp[f'Venta_{anio_actual}'] - df_comp[f'Venta_{anio_ant}']
-            
-            st.download_button(f"📥 Comparativo USD {anio_actual} vs {anio_ant}", data=ui.convert_df_to_excel(df_comp), file_name="Comparativo_Anual_USD.xlsx")
-
-    # --- SECCIÓN 2: PRODUCTOS E INVENTARIO ---
-    with col_d2:
-        st.subheader("📦 Productos")
-        
-        # 4. Mix por Tipo y Categoría (Gráficos Tab 3)
-        if not df_prod.empty:
-            # Agregado por Tipo (Global)
-            df_p_clean = df_prod.merge(df_cat[['ID_Producto','Tipo']], on='ID_Producto', how='left').fillna({'Tipo':'Otro'})
-            grp_tipo = df_p_clean.groupby('Tipo')['Venta_Neta'].sum().reset_index()
-            
-            # Agregado por Vendedor y Producto (Top Vendedores)
-            df_top_vend = pd.merge(df_p_clean, df_main[['id', 'Vendedor']], left_on='ID_Factura', right_on='id', how='left')
-            grp_vend_prod = df_top_vend.groupby(['Vendedor', 'Producto'])['Venta_Neta'].sum().reset_index()
-
-            # Usamos un ExcelWriter para bajar varias hojas en un solo archivo
-            buffer_prod = io.BytesIO()
-            with pd.ExcelWriter(buffer_prod, engine='openpyxl') as writer:
-                df_prod.to_excel(writer, sheet_name='Detalle_Movimientos', index=False)
-                grp_tipo.to_excel(writer, sheet_name='Mix_por_Tipo', index=False)
-                grp_vend_prod.to_excel(writer, sheet_name='Top_Producto_Vendedor', index=False)
-            
-            st.download_button("📥 Reporte Maestro de Productos (Multi-Hoja)", data=buffer_prod.getvalue(), file_name="Maestro_Productos.xlsx")
-        
-        # 5. Inventario Baja Rotación
-        if st.button("🔄 Generar Baja Rotación"):
-            df_inv_dl, _ = services.cargar_inventario_baja_rotacion()
-            if not df_inv_dl.empty:
-                st.download_button("📥 Descargar Baja Rotación", data=ui.convert_df_to_excel(df_inv_dl), file_name="Baja_Rotacion.xlsx")
-
-    st.divider()
-    col_d3, col_d4 = st.columns(2)
-
-    # --- SECCIÓN 3: CARTERA Y RIESGO ---
-    with col_d3:
-        st.subheader("💰 Cartera y Riesgo")
-        
-        # 6. Cartera y Antigüedad (Gráfico Tab 5)
-        df_cx_dl = services.cargar_cartera()
-        if not df_cx_dl.empty:
-            # Resumen por Antigüedad
-            res_ant = df_cx_dl.groupby('Antiguedad')['amount_residual'].sum().reset_index()
-            
-            buffer_cx = io.BytesIO()
-            with pd.ExcelWriter(buffer_cx, engine='openpyxl') as writer:
-                df_cx_dl.to_excel(writer, sheet_name='Detalle_Facturas', index=False)
-                res_ant.to_excel(writer, sheet_name='Resumen_Antiguedad', index=False)
-                
-            st.download_button("📥 Reporte Cartera y Antigüedad", data=buffer_cx.getvalue(), file_name="Reporte_Cartera.xlsx")
-
-        # 7. Clientes en Riesgo (Alerta Tab 6)
-        if not df_main.empty:
-            # Recalcular lógica de riesgo
-            df_risk = df_main.sort_values(['Cliente', 'invoice_date'])
-            df_risk['Prev_Date'] = df_risk.groupby('Cliente')['invoice_date'].shift(1)
-            df_risk['Days_Diff'] = (df_risk['invoice_date'] - df_risk['Prev_Date']).dt.days
-            freq_cli = df_risk.groupby('Cliente')['Days_Diff'].mean().reset_index().rename(columns={'Days_Diff': 'Ciclo_Habitual'})
-            last_buy = df_risk.groupby('Cliente')['invoice_date'].max().reset_index().rename(columns={'invoice_date': 'Ultima_Compra'})
-            df_alerta = pd.merge(freq_cli, last_buy, on='Cliente')
-            df_alerta['Dias_Sin_Comprar'] = (datetime.now() - df_alerta['Ultima_Compra']).dt.days
-            df_alerta['Alerta'] = (df_alerta['Dias_Sin_Comprar'] > (df_alerta['Ciclo_Habitual'] * 1.5)) & (df_alerta['Dias_Sin_Comprar'] < 365)
-            riesgo_dl = df_alerta[df_alerta['Alerta']].copy()
-            
-            if not riesgo_dl.empty:
-                st.download_button("📥 Clientes en Riesgo (Alerta Fuga)", data=ui.convert_df_to_excel(riesgo_dl), file_name="Clientes_En_Riesgo.xlsx")
-
-    # --- SECCIÓN 4: VENDEDORES ---
-    with col_d4:
-        st.subheader("👤 Performance")
-        if not df_main.empty:
-            perf = df_main.groupby(['Vendedor', df_main['invoice_date'].dt.year])['Venta_Neta'].sum().reset_index()
-            st.download_button("📥 Ventas por Vendedor (Anual)", data=ui.convert_df_to_excel(perf), file_name="Performance_Vendedores.xlsx")
-
-# === PESTAÑA 10: CONFIGURACIÓN ===
-with tab_config:
-    st.header("⚙️ Configuración Global")
-    st.markdown("Ajusta los parámetros que afectan a todo el dashboard.")
-    
-    st.subheader("💹 Moneda y Tipo de Cambio")
-    # El valor se sincroniza automáticamente con st.session_state.tc_usd por el 'key'
-    st.number_input("Tipo de Cambio (USD -> CRC)", key="tc_usd", format="%.2f")
-    
-    st.info(f"💡 **Dato de Odoo**: El tipo de cambio actual en el sistema es ₡{services.get_current_usd_rate():,.2f}")
-    st.caption("Nota: Cambiar este valor actualizará todos los cálculos de conversión a dólares en las demás pestañas.")
 
 
 
