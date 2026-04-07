@@ -701,11 +701,24 @@ with tab_cli:
 # === PESTAÑA 7: VENDEDORES ===
 with tab_vend:
     if not df_main.empty:
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1: anio_v = st.selectbox("Año", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True), key="sv")
-        with c2: vend = st.selectbox("Vendedor", sorted(df_main['Vendedor'].unique()))
+        with c2: 
+            mes_nombres = {0: "Todos", 1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+                           7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
+            mes_v_nom = st.selectbox("Mes", list(mes_nombres.values()), key="smv")
+            mes_v = [k for k, v in mes_nombres.items() if v == mes_v_nom][0]
+        with c3: vend = st.selectbox("Vendedor", sorted(df_main['Vendedor'].unique()))
+        
+        # Filtrado base por Año y Vendedor
         df_v = df_main[(df_main['invoice_date'].dt.year == anio_v) & (df_main['Vendedor'] == vend)]
         df_v_old = df_main[(df_main['invoice_date'].dt.year == (anio_v-1)) & (df_main['Vendedor'] == vend)]
+        
+        # Filtrado por Mes (si no es Todos)
+        if mes_v > 0:
+            df_v = df_v[df_v['invoice_date'].dt.month == mes_v]
+            df_v_old = df_v_old[df_v_old['invoice_date'].dt.month == mes_v]
+            
         perdidos_v = list(set(df_v_old['Cliente']) - set(df_v['Cliente']))
         k1, k2, k3 = st.columns(3)
         with k1: ui.card_kpi("Venta", df_v['Venta_Neta'].sum(), "border-green")
