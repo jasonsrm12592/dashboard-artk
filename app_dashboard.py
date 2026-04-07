@@ -729,10 +729,19 @@ with tab_vend:
             df_v_old = df_v_old[df_v_old['invoice_date'].dt.month == mes_v]
             
         perdidos_v = list(set(df_v_old['Cliente']) - set(df_v['Cliente']))
-        k1, k2, k3 = st.columns(3)
-        with k1: ui.card_kpi("Venta", df_v['Venta_Neta'].sum(), "border-green")
-        with k2: ui.card_kpi("Clientes", df_v['Cliente'].nunique(), "border-blue", formato="numero")
-        with k3: ui.card_kpi("Riesgo", len(perdidos_v), "border-red", formato="numero")
+        
+        # Cálculos de KPIs adicionales
+        venta_act = df_v['Venta_Neta'].sum()
+        venta_ant = df_v_old['Venta_Neta'].sum()
+        delta_v = (venta_act - venta_ant) / venta_ant * 100 if venta_ant > 0 else 0
+        
+        ticket_prom = venta_act / df_v['name'].nunique() if df_v['name'].nunique() > 0 else 0
+        
+        k1, k2, k3, k4 = st.columns(4)
+        with k1: ui.card_kpi("Venta", venta_act, "border-green", nota=f"{delta_v:+.1f}% vs Año Ant." if venta_ant > 0 else "Sin datos prev.")
+        with k2: ui.card_kpi("Ticket Promedio", ticket_prom, "border-purple", nota="Monto prom. p/factura")
+        with k3: ui.card_kpi("Clientes", df_v['Cliente'].nunique(), "border-blue", formato="numero")
+        with k4: ui.card_kpi("Riesgo", len(perdidos_v), "border-red", formato="numero")
         c_v1, c_v2 = st.columns(2)
         with c_v1:
             st.subheader("Mejores Clientes")
@@ -802,6 +811,40 @@ with tab_vend:
                         st.warning("No se pudo cargar información de Marcas.")
             else:
                 st.info("No hay detalle de productos disponible para este vendedor.")
+
+            st.divider()
+            
+            # --- NUEVA FILA: TENDENCIA Y CATEGORÍA ---
+            c_trend, c_cat_v = st.columns(2)
+            
+            with c_trend:
+                st.subheader("📈 Tendencia Mensual (YoY)")
+                # Data Anual completa para el vendedor (sin filtro de mes para ver la tendencia)
+                df_v_ann = df_main[(df_main['invoice_date'].dt.year == anio_v) & (df_main['Vendedor'] == vend)]
+                df_v_old_ann = df_main[(df_main['invoice_date'].dt.year == (anio_v-1)) & (df_main['Vendedor'] == vend)]
+                
+                v_act_m = df_v_ann.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': str(anio_v)})
+                v_ant_m = df_v_old_ann.groupby('Mes_Num')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta': str(anio_v-1)})
+                
+                df_trend_all = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act_m, on='Mes_Num', how='left').merge(v_ant_m, on='Mes_Num', how='left').fillna(0)
+                df_trend_all['Mes'] = df_trend_all['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
+                
+                fig_trend = go.Figure()
+                fig_trend.add_trace(go.Scatter(x=df_trend_all['Mes'], y=df_trend_all[str(anio_v)], name=f"Año {anio_v}", line=dict(color='#2ecc71', width=3), mode='lines+markers'))
+                fig_trend.add_trace(go.Scatter(x=df_trend_all['Mes'], y=df_trend_all[str(anio_v-1)], name=f"Año {anio_v-1}", line=dict(color='#95a5a6', dash='dash'), mode='lines+markers'))
+                
+                fig_trend.update_layout(height=350, margin=dict(t=30, b=30))
+                st.plotly_chart(ui.config_plotly(fig_trend), use_container_width=True)
+                
+            with c_cat_v:
+                st.subheader("👥 Mix por Categoría de Cliente")
+                if not df_v.empty:
+                    fig_cat_v = create_improved_pie(df_v, 'Venta_Neta', 'Categoria_Cliente', "", prefix="₡")
+                    fig_cat_v = ui.config_plotly(fig_cat_v)
+                    fig_cat_v.update_layout(legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05))
+                    st.plotly_chart(fig_cat_v, use_container_width=True)
+                else:
+                    st.info("Sin datos de clientes para este periodo.")
 
 # === PESTAÑA 8: RADIOGRAFÍA ===
 with tab_det:
