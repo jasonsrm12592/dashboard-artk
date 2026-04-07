@@ -567,6 +567,7 @@ with tab_prod:
                 cat_sel = st.selectbox("Filtrar Categoría:", cats, key="prod_cat_filter")
             
             with c_cat2:
+                df_cf = df_merged[df_merged['Categoria_Cliente'] == cat_sel]
                 df_cf_full = df_cf.groupby('Producto')[col_calc].agg(agg_func).sort_values(ascending=False).reset_index()
                 if not df_cf_full.empty:
                     top_cat_show = df_cf_full.head(10).sort_values(col_calc)
@@ -587,6 +588,7 @@ with tab_prod:
                 zona_sel = st.selectbox("Filtrar Zona:", zonas, key="prod_zona_filter")
             
             with c_zon2:
+                df_zf = df_merged[df_merged['Zona_Comercial'] == zona_sel]
                 df_zf_full = df_zf.groupby('Producto')[col_calc].agg(agg_func).sort_values(ascending=False).reset_index()
                 if not df_zf_full.empty:
                     top_zona_show = df_zf_full.head(10).sort_values(col_calc)
@@ -607,6 +609,7 @@ with tab_prod:
                 vend_sel = st.selectbox("Filtrar Vendedor:", vendedores, key="prod_vend_filter")
             
             with c_ven2:
+                df_vf = df_merged[df_merged['Vendedor'] == vend_sel]
                 df_vf_full = df_vf.groupby('Producto')[col_calc].agg(agg_func).sort_values(ascending=False).reset_index()
                 if not df_vf_full.empty:
                     top_vend_show = df_vf_full.head(10).sort_values(col_calc)
