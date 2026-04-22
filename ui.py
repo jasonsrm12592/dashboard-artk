@@ -179,17 +179,20 @@ def config_plotly(fig):
         paper_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", y=1.1, font=dict(size=11)),
         hoverlabel=dict(font_size=13, font_family="'Inter', sans-serif"),
-        colorway=['#3498db', '#2ecc71', '#e74c3c', '#f1c40f', '#9b59b6', '#34495e']
+        colorway=['#3498db', '#2ecc71', '#e74c3c', '#f1c40f', '#9b59b6', '#34495e'],
+        dragmode=False  # Previene que arrastrar haga zoom (vital para scroll móvil)
     )
     fig.update_xaxes(
         showgrid=False,
         zeroline=False,
-        showline=True
+        showline=True,
+        fixedrange=True
     )
     fig.update_yaxes(
         showgrid=True,
         zeroline=False,
-        showline=False
+        showline=False,
+        fixedrange=True
     )
     fig.update_traces(
         marker=dict(line=dict(width=0)), 
