@@ -69,18 +69,18 @@ st.image("logo.png", width=100)
 st.title("Alrotek Monitor v1")
 
 # SE AGREGÓ 'tab_config' AL FINAL
-tab_kpis, tab_renta, tab_prod, tab_inv, tab_cx, tab_cli, tab_vend, tab_det, tab_config = st.tabs(["📊 Visión General", "📈 Rentabilidad Proyectos", "📦 Productos", "🕸️ Baja Rotación", "💰 Cartera", "👥 Segmentación", "💼 Vendedores", "🔍 Radiografía", "⚙️ Config"])
+tab_kpis, tab_renta, tab_prod, tab_inv, tab_cx, tab_cli, tab_vend, tab_det, tab_config = st.tabs([":material/bar_chart: Visión General", ":material/trending_up: Rentabilidad Proyectos", ":material/inventory_2: Productos", ":material/hourglass_bottom: Baja Rotación", ":material/payments: Cartera", ":material/group: Segmentación", ":material/business_center: Vendedores", ":material/search: Radiografía", ":material/settings: Config"])
 
 # === PESTAÑA: CONFIGURACIÓN (REUBICADA AL INICIO DE LA LÓGICA) ===
 with tab_config:
-    st.header("⚙️ Configuración Global")
+    st.header(":material/settings: Configuración Global")
     st.markdown("Ajusta los parámetros que afectan a todo el dashboard.")
     
-    st.subheader("💹 Moneda y Tipo de Cambio")
+    st.subheader(":material/currency_exchange: Moneda y Tipo de Cambio")
     # El valor se sincroniza automáticamente con st.session_state.tc_usd por el 'key'
     st.number_input("Tipo de Cambio (USD -> CRC)", key="tc_usd", format="%.2f")
     
-    st.info(f"💡 **Dato de Odoo**: El tipo de cambio actual en el sistema es ₡{services.get_current_usd_rate():,.2f}")
+    st.info(f":material/lightbulb: **Dato de Odoo**: El tipo de cambio actual en el sistema es ₡{services.get_current_usd_rate():,.2f}")
     st.caption("Nota: Cambiar este valor actualizará todos los cálculos de conversión a dólares en las demás pestañas.")
 
 with st.spinner('Cargando...'):
@@ -104,7 +104,7 @@ with st.spinner('Cargando...'):
 with tab_kpis:
     if not df_main.empty:
         col_f, _ = st.columns([1,3])
-        with col_f: anio_sel = st.selectbox("📅 Año Fiscal", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True))
+        with col_f: anio_sel = st.selectbox(":material/calendar_today: Año Fiscal", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True))
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
         df_ant = df_main[df_main['invoice_date'].dt.year == (anio_sel - 1)]
         
@@ -148,10 +148,10 @@ with tab_kpis:
                                text=df_gm['Label'], textposition='auto'))
         fig_m.add_trace(go.Scatter(x=df_gm['Mes'], y=df_gm['Meta'], name='Meta (USD)', line=dict(color='#f1c40f', width=3, dash='dash')))
         st.plotly_chart(ui.config_plotly(fig_m), use_container_width=True)
-        ui.download_button(df_gm, f"Metas_{anio_sel}", "📥 Descargar Datos de Metas")
+        ui.download_button(df_gm, f"Metas_{anio_sel}", ":material/download: Descargar Datos de Metas")
 
         st.divider()
-        st.markdown(f"### 🗓️ Comparativo USD: {anio_sel} vs {anio_sel-1}")
+        st.markdown(f"### :material/calendar_month: Comparativo USD: {anio_sel} vs {anio_sel-1}")
         v_ant_g = df_ant.groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': 'Anterior'})
         df_gc = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_ant_g, on='Mes_Num', how='left').fillna(0)
         df_gc['Mes'] = df_gc['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
@@ -160,11 +160,11 @@ with tab_kpis:
         fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Actual'], name=f'{anio_sel}', marker_color='#2980b9', text=df_gc['Actual'], texttemplate='%{y:$.3s}', textposition='auto'))
         fig_c.add_trace(go.Bar(x=df_gc['Mes'], y=df_gc['Anterior'], name=f'{anio_sel-1}', marker_color='#95a5a6', text=df_gc['Anterior'], texttemplate='%{y:$.3s}', textposition='auto'))
         st.plotly_chart(ui.config_plotly(fig_c), use_container_width=True)
-        ui.download_button(df_gc, f"Comparativo_{anio_sel}_vs_{anio_sel-1}", "📥 Descargar Comparativo Anual")
+        ui.download_button(df_gc, f"Comparativo_{anio_sel}_vs_{anio_sel-1}", ":material/download: Descargar Comparativo Anual")
 
 # --- NUEVO: GRÁFICO VENTAS SEMANA ACTUAL ---
         st.divider()
-        st.markdown("### 📅 Ventas Semana Actual")
+        st.markdown("### :material/calendar_today: Ventas Semana Actual")
         
         hoy = datetime.now()
         # Calcular lunes (0) y domingo (6) de la semana actual
@@ -190,14 +190,14 @@ with tab_kpis:
                            title=f"Semana del {inicio_semana.strftime('%d/%m')} al {fin_semana.strftime('%d/%m')}")
             fig_w.update_traces(marker_color='#1abc9c') # Color cian para diferenciar
             st.plotly_chart(ui.config_plotly(fig_w), use_container_width=True)
-            ui.download_button(v_semana, "Ventas_Semana_Actual", "📥 Descargar Ventas Semana")
+            ui.download_button(v_semana, "Ventas_Semana_Actual", ":material/download: Descargar Ventas Semana")
         else:
-            st.info(f"💤 No hay ventas registradas aún en la semana del {inicio_semana.strftime('%d/%m')}.")
+            st.info(f":material/bed: No hay ventas registradas aún en la semana del {inicio_semana.strftime('%d/%m')}.")
         
         st.divider()
         c_mix, c_top = st.columns(2)
         with c_mix:
-            st.subheader("📊 Mix por Plan")
+            st.subheader(":material/bar_chart: Mix por Plan")
             if not df_prod.empty:
                 df_l = df_prod[df_prod['date'].dt.year == anio_sel].copy()
                 mapa = dict(zip(df_an['id_cuenta_analitica'].astype(str), df_an['Plan_Nombre'])) if not df_an.empty else {}
@@ -228,22 +228,22 @@ with tab_kpis:
                 fig_mix.update_traces(textposition='inside', textfont_size=10)
                 
                 st.plotly_chart(ui.config_plotly(fig_mix), use_container_width=True)
-                ui.download_button(df_grp, f"Mix_Plan_{anio_sel}", "📥 Descargar Datos del Mix")
+                ui.download_button(df_grp, f"Mix_Plan_{anio_sel}", ":material/download: Descargar Datos del Mix")
        
         with c_top:
-            st.subheader("🏆 Top Vendedores")
+            st.subheader(":material/emoji_events: Top Vendedores")
             r_act = df_anio.groupby('Vendedor')['Venta_Neta'].sum().reset_index()
             r_ant = df_ant.groupby('Vendedor')['Venta_Neta'].sum().reset_index().rename(columns={'Venta_Neta':'Venta_Ant'})
             r_fin = pd.merge(r_act, r_ant, on='Vendedor', how='left').fillna(0)
             
             def txt(row):
                 d = ((row['Venta_Neta'] - row['Venta_Ant'])/row['Venta_Ant']*100) if row['Venta_Ant']>0 else 100
-                i = "⬆️" if d>=0 else "⬇️"
+                i = ":material/arrow_upward:" if d>=0 else ":material/arrow_downward:"
                 return f"₡{row['Venta_Neta']/1e6:.1f}M {i} {d:.0f}%"
             
             r_fin['T'] = r_fin.apply(txt, axis=1)
             st.plotly_chart(ui.config_plotly(go.Figure(go.Bar(x=r_fin.sort_values('Venta_Neta').tail(20)['Venta_Neta'], y=r_fin.sort_values('Venta_Neta').tail(20)['Vendedor'], orientation='h', text=r_fin.sort_values('Venta_Neta').tail(20)['T'], textposition='auto', marker_color='#2ecc71'))), use_container_width=True)
-            ui.download_button(r_fin, "Ranking_Vendedores", "📥 Descargar Ranking")
+            ui.download_button(r_fin, "Ranking_Vendedores", ":material/download: Descargar Ranking")
 
 # === PESTAÑA 2: PROYECTOS (ESTRUCTURA v10.7) ===
 with tab_renta:
@@ -302,7 +302,7 @@ with tab_renta:
             
             color_alerta = "bg-alert-green" if pct_actual > 30 else ("bg-alert-warn" if pct_actual > 10 else "bg-alert-red")
         else:
-            st.info("💡 Seleccione uno o más proyectos para visualizar la rentabilidad. Las tarjetas reaccionarán dinámicamente.")
+            st.info(":material/lightbulb: Seleccione uno o más proyectos para visualizar la rentabilidad. Las tarjetas reaccionarán dinámicamente.")
             df_f = df_h = df_s = df_c = df_fe = pd.DataFrame()
             totales = {k: 0 for k in ['Venta','Instalación','Suministros','WIP','Provisión','Costo Retail','Otros Gastos', 'Ajustes Inv']}
             total_fact = total_pend = total_ing = costo_horas_mes = costo_vivo = margen_actual = pct_actual = 0
@@ -347,10 +347,10 @@ with tab_renta:
             t1, t2, t3, t4, t5, t6 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend.", "Historial Inv.", "Parte de Horas"])
             with t1: 
                 st.dataframe(df_s, use_container_width=True)
-                ui.download_button(df_s, "Inventario_en_Sitio", "📥 Descargar Inventario")
+                ui.download_button(df_s, "Inventario_en_Sitio", ":material/download: Descargar Inventario")
             with t2: 
                 st.dataframe(df_c, use_container_width=True)
-                ui.download_button(df_c, "Compras_Pendientes_Proyecto", "📥 Descargar Compras")
+                ui.download_button(df_c, "Compras_Pendientes_Proyecto", ":material/download: Descargar Compras")
             with t3: 
                 if not df_f.empty:
                     cols_contables = ['Fecha', 'Descripción de Asiento', 'Proveedor o Cliente', 'Debe', 'Haber', 'Clasificacion']
@@ -358,10 +358,10 @@ with tab_renta:
                     st.dataframe(df_f[cols_disp], use_container_width=True, hide_index=True)
                 else:
                     st.dataframe(df_f, use_container_width=True)
-                ui.download_button(df_f, "Contabilidad_Proyecto", "📥 Descargar Contabilidad")
+                ui.download_button(df_f, "Contabilidad_Proyecto", ":material/download: Descargar Contabilidad")
             with t4: 
                 st.dataframe(df_fe, use_container_width=True)
-                ui.download_button(df_fe, "Facturacion_Pendiente", "📥 Descargar Facturacion")
+                ui.download_button(df_fe, "Facturacion_Pendiente", ":material/download: Descargar Facturacion")
             with t5:
                 df_ensambles, df_cust, df_post, hist_status = services.cargar_historial_inventario_proyecto(sel_ids, proys)
                 
@@ -385,7 +385,7 @@ with tab_renta:
                     styled_df_p = df_to_show_p.style.apply(highlight_110, axis=1)
                     
                     st.dataframe(styled_df_p, use_container_width=True)
-                    st.download_button("📥 Descargar Ensambles", data=ui.convert_df_to_excel(df_ensambles), file_name=f"Ensambles_{proys[0][:10]}.xlsx", key=f"dwn_prod_{proys[0]}")
+                    st.download_button(":material/download: Descargar Ensambles", data=ui.convert_df_to_excel(df_ensambles), file_name=f"Ensambles_{proys[0][:10]}.xlsx", key=f"dwn_prod_{proys[0]}")
                 else:
                     st.info("No hay historial de ensambles registrable.")
                 
@@ -400,7 +400,7 @@ with tab_renta:
                     })
                     
                     st.dataframe(df_to_show_c, use_container_width=True)
-                    st.download_button("📥 Descargar Entregas", data=ui.convert_df_to_excel(df_cust), file_name=f"Entregas_{proys[0][:10]}.xlsx", key=f"dwn_cust_{proys[0]}")
+                    st.download_button(":material/download: Descargar Entregas", data=ui.convert_df_to_excel(df_cust), file_name=f"Entregas_{proys[0][:10]}.xlsx", key=f"dwn_cust_{proys[0]}")
                 else:
                     st.info("No hay historial de entregas al cliente registrable.")
                     
@@ -415,7 +415,7 @@ with tab_renta:
                     })
                     
                     st.dataframe(df_to_show_post, use_container_width=True)
-                    st.download_button("📥 Descargar Ajustes", data=ui.convert_df_to_excel(df_post), file_name=f"Ajustes_{proys[0][:10]}.xlsx", key=f"dwn_post_{proys[0]}")
+                    st.download_button(":material/download: Descargar Ajustes", data=ui.convert_df_to_excel(df_post), file_name=f"Ajustes_{proys[0][:10]}.xlsx", key=f"dwn_post_{proys[0]}")
                 else:
                     st.info("No hay ajustes posteriores registrables.")
                 
@@ -424,7 +424,7 @@ with tab_renta:
                     cols_horas = ['Fecha', 'Técnico', 'Tipo_Hora', 'Horas']
                     df_h_show = df_h[[c for c in cols_horas if c in df_h.columns]].rename(columns={'Tipo_Hora': 'Tipo de Hora', 'Horas': 'Cantidad (Horas)'})
                     st.dataframe(df_h_show, use_container_width=True, hide_index=True)
-                    ui.download_button(df_h_show, "Parte_de_Horas", "📥 Descargar Horas")
+                    ui.download_button(df_h_show, "Parte_de_Horas", ":material/download: Descargar Horas")
                 else:
                     st.info("No hay registro de horas para este proyecto.")
                     
@@ -517,7 +517,7 @@ with tab_renta:
                 if not df_f.empty: df_f.to_excel(writer, sheet_name='Contabilidad_Full', index=False)
             
             st.download_button(
-                f"📥 Descargar ER con Comisión: {', '.join(proys[:1])}...", 
+                f":material/download: Descargar ER con Comisión: {', '.join(proys[:1])}...", 
                 data=buffer_proy.getvalue(), 
                 file_name=f"ER_{proys[0][:10]}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -529,10 +529,10 @@ with tab_prod:
         # --- 1. FILTROS GENERALES ---
         c_f1, c_f2 = st.columns([1, 4])
         with c_f1: 
-            anio = st.selectbox("📅 Año", sorted(df_prod['date'].dt.year.unique(), reverse=True), key="prod_anio_sel")
+            anio = st.selectbox(":material/calendar_today: Año", sorted(df_prod['date'].dt.year.unique(), reverse=True), key="prod_anio_sel")
         with c_f2: 
             # Selector de métrica (Afecta a TODOS los gráficos)
-            tipo_ver = st.radio("📊 Ver Gráficos por:", 
+            tipo_ver = st.radio(":material/bar_chart: Ver Gráficos por:", 
                                 ["Monto (₡)", "Cantidad (Und)", "Freq. Facturas (# Docs)"], 
                                 index=0, horizontal=True, key="prod_metric_sel")
         
@@ -660,7 +660,7 @@ with tab_inv:
             with c2: ui.card_kpi("Total Items", len(df_h), "border-gray", formato="numero")
             with c3: ui.card_kpi("Items Críticos", len(df_show), "border-orange", formato="numero")
             st.dataframe(df_show[['Producto','Ubicacion','quantity','Dias_Sin_Salida','Valor']], use_container_width=True)
-            ui.download_button(df_show, "Inventario_Baja_Rotacion", "📥 Descargar Inventario Inactivo")
+            ui.download_button(df_show, "Inventario_Baja_Rotacion", ":material/download: Descargar Inventario Inactivo")
         else: st.info(status)
 
 # === PESTAÑA 5: CARTERA ===
@@ -681,7 +681,7 @@ with tab_cx:
         with c_t:
             df_full_deuda = df_cx.groupby('Cliente')['amount_residual'].sum().sort_values(ascending=False).reset_index()
             st.dataframe(df_full_deuda.head(15), use_container_width=True)
-            ui.download_button(df_full_deuda, "Deuda_Cartera_Completa", "📥 Descargar Cartera Completa")
+            ui.download_button(df_full_deuda, "Deuda_Cartera_Completa", ":material/download: Descargar Cartera Completa")
 
 # === PESTAÑA 6: SEGMENTACIÓN ===
 with tab_cli:
@@ -727,7 +727,7 @@ with tab_cli:
         st.divider()
         
         # --- ANÁLISIS DE RIESGO (NUEVO) ---
-        st.subheader("🚨 Clientes en Riesgo (Alerta Temprana)")
+        st.subheader(":material/emergency: Clientes en Riesgo (Alerta Temprana)")
         st.caption("Clientes activos que han superado en 1.5x su ciclo habitual de compra.")
         
         # 1. Calcular frecuencia por cliente
@@ -849,7 +849,7 @@ with tab_vend:
                 c_top10, c_brand = st.columns(2)
                 
                 with c_top10:
-                    st.subheader(f"🏆 Top 10 Productos ({metrica_vend})")
+                    st.subheader(f":material/emoji_events: Top 10 Productos ({metrica_vend})")
                     prods_full = df_prod_vend.groupby('Producto')[val_col].agg(agg).sort_values(ascending=False).reset_index()
                     prods_show = prods_full.head(10).sort_values(val_col)
                     fig_vp = px.bar(prods_show, x=val_col, y='Producto', orientation='h', text_auto=fmt, 
@@ -891,7 +891,7 @@ with tab_vend:
             c_trend, c_cat_v = st.columns(2)
             
             with c_trend:
-                st.subheader("📈 Tendencia Mensual (YoY)")
+                st.subheader(":material/trending_up: Tendencia Mensual (YoY)")
                 # Data Anual completa para el vendedor (sin filtro de mes para ver la tendencia)
                 df_v_ann = df_main[(df_main['invoice_date'].dt.year == anio_v) & (df_main['Vendedor'] == vend)]
                 df_v_old_ann = df_main[(df_main['invoice_date'].dt.year == (anio_v-1)) & (df_main['Vendedor'] == vend)]
@@ -911,7 +911,7 @@ with tab_vend:
                 ui.download_button(df_trend_all, f"Trend_YoY_{vend}")
                 
             with c_cat_v:
-                st.subheader("👥 Mix por Categoría de Cliente")
+                st.subheader(":material/group: Mix por Categoría de Cliente")
                 if not df_v.empty:
                     fig_cat_v = create_improved_pie(df_v, 'Venta_Neta', 'Categoria_Cliente', "", prefix="₡")
                     fig_cat_v = ui.config_plotly(fig_cat_v)
@@ -1011,7 +1011,7 @@ with tab_det:
                     df_cp.groupby('Producto')['quantity'].sum().reset_index().to_excel(writer, sheet_name='Productos_Comprados', index=False)
                         
             st.download_button(
-                f"📥 Descargar Historial de {cli}",
+                f":material/download: Descargar Historial de {cli}",
                 data=buffer_cli.getvalue(),
                 file_name=f"Historial_{cli[:15]}.xlsx"
             )

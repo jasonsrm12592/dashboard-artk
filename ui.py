@@ -108,7 +108,7 @@ def convert_df_to_excel(df, sheet_name='Datos'):
         df.to_excel(writer, index=False, sheet_name=sheet_name)
     return output.getvalue()
 
-def download_button(df, filename, label="📥 Descargar Excel"):
+def download_button(df, filename, label=":material/download: Descargar Excel"):
     """Genera un botón de descarga para un DataFrame en formato Excel."""
     if df is not None and not df.empty:
         buffer = convert_df_to_excel(df)
