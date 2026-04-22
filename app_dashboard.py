@@ -342,7 +342,12 @@ with tab_renta:
                 st.dataframe(df_c, use_container_width=True)
                 ui.download_button(df_c, "Compras_Pendientes_Proyecto", "📥 Descargar Compras")
             with t3: 
-                st.dataframe(df_f, use_container_width=True)
+                if not df_f.empty:
+                    cols_contables = ['Fecha', 'Descripción de Asiento', 'Proveedor o Cliente', 'Debe', 'Haber', 'Clasificacion']
+                    cols_disp = [c for c in cols_contables if c in df_f.columns]
+                    st.dataframe(df_f[cols_disp], use_container_width=True, hide_index=True)
+                else:
+                    st.dataframe(df_f, use_container_width=True)
                 ui.download_button(df_f, "Contabilidad_Proyecto", "📥 Descargar Contabilidad")
             with t4: 
                 st.dataframe(df_fe, use_container_width=True)

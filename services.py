@@ -243,7 +243,7 @@ def cargar_pnl_historico():
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         ids = list(set(config.TODOS_LOS_IDS + models.execute_kw(DB, uid, PASSWORD, 'account.account', 'search', [[['code', '=like', '6%']]])))
-        data = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [[['account_id', 'in', ids], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]])], {'fields': ['date', 'account_id', 'debit', 'credit', 'analytic_distribution']})
+        data = models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'read', [models.execute_kw(DB, uid, PASSWORD, 'account.move.line', 'search', [[['account_id', 'in', ids], ['company_id', '=', COMPANY_ID], ['parent_state', '=', 'posted'], ['analytic_distribution', '!=', False]]])], {'fields': ['date', 'name', 'partner_id', 'account_id', 'debit', 'credit', 'analytic_distribution']})
         df = pd.DataFrame(data)
         if not df.empty:
             df['ID_Cuenta'] = df['account_id'].apply(lambda x: x[0])
@@ -253,6 +253,12 @@ def cargar_pnl_historico():
             df['id_cuenta_analitica'] = df['analytic_distribution'].apply(get_aid)
             df = df.drop(columns=['account_id', 'analytic_distribution'], errors='ignore')
             df['Monto_Neto'] = df['credit'] - df['debit']
+            df['Fecha'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d') if 'date' in df.columns else None
+            df['Descripción de Asiento'] = df['name'] if 'name' in df.columns else "N/A"
+            df['Proveedor o Cliente'] = df['partner_id'].apply(lambda x: x[1] if isinstance(x, list) and len(x) > 1 else "N/A") if 'partner_id' in df.columns else "N/A"
+            df['Debe'] = df['debit'] if 'debit' in df.columns else 0
+            df['Haber'] = df['credit'] if 'credit' in df.columns else 0
+            
             def clasificar(id_acc):
                 if id_acc in config.IDS_INGRESOS: return "Venta"
                 if id_acc == config.ID_WIP: return "WIP"
