@@ -416,7 +416,7 @@ with tab_renta:
                     st.dataframe(df_h_show, use_container_width=True, hide_index=True)
                     ui.download_button(df_h_show, "Parte_de_Horas", "📥 Descargar Horas")
                 else:
-                    st.info("No hay registro de horas para este proyecto en el período.")
+                    st.info("No hay registro de horas para este proyecto.")
                     
             st.divider()
 

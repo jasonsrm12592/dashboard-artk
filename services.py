@@ -279,8 +279,22 @@ def cargar_detalle_horas_mes(ids):
         common = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/common')
         uid = common.authenticate(DB, USERNAME, PASSWORD, {})
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
-        hoy = datetime.now()
-        ids_l = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [[['account_id', 'in', [int(x) for x in ids if x]], ['date', '>=', hoy.replace(day=1).strftime('%Y-%m-%d')], ['date', '<=', hoy.strftime('%Y-%m-%d')], ['x_studio_tipo_horas_1', '!=', False]]])
+        clean_ids = [int(x) for x in ids if x]
+        ids_proy = []
+        try:
+            ids_proy = models.execute_kw(DB, uid, PASSWORD, 'project.project', 'search', [[['analytic_account_id', 'in', clean_ids]]])
+        except: pass
+        
+        domain = [
+            ['x_studio_tipo_horas_1', '!=', False],
+            '|',
+            ['account_id', 'in', clean_ids],
+            ['project_id', 'in', ids_proy if ids_proy else [-1]]
+        ]
+        
+        ids_l = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [domain])
+        if not ids_l: return pd.DataFrame()
+        
         data = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids_l], {'fields': ['date', 'employee_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1']})
         df = pd.DataFrame(data)
         if not df.empty:
