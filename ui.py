@@ -14,6 +14,10 @@ def load_styles():
         header {visibility: hidden;}
         .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
         
+        @keyframes fadeUpIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
         .kpi-card {
             background-color: white;
             border-radius: 40px;
@@ -25,6 +29,7 @@ def load_styles():
             flex-direction: row;
             align-items: center;
             min-height: 80px;
+            animation: fadeUpIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
             transition: transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
         }
         .kpi-card:hover {

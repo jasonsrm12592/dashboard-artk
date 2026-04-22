@@ -249,15 +249,17 @@ with tab_kpis:
 with tab_renta:
     df_pnl = services.cargar_pnl_historico()
     if not df_an.empty:
-        c1, c2 = st.columns(2)
-        mapa_c = dict(zip(df_an['id_cuenta_analitica'].astype(float), df_an['Plan_Nombre']))
-        mapa_n = dict(zip(df_an['id_cuenta_analitica'].astype(float), df_an['Cuenta_Nombre']))
-        
-        with c1: planes = st.multiselect("Planes:", sorted(list(set(mapa_c.values()))))
-        posibles = [id for id, p in mapa_c.items() if p in planes] if planes else []
-        nombres = [mapa_n[id] for id in posibles]
-        with c2: proys = st.multiselect("Proyectos:", sorted(nombres))
-        
+        with st.container(border=True):
+            st.markdown("##### 🔍 Búsqueda de Proyecto")
+            c1, c2 = st.columns(2)
+            with c1: planes = st.multiselect("Filtrar por Plan (Opcional):", sorted(list(set(mapa_c.values()))))
+            if planes:
+                posibles = [id for id, p in mapa_c.items() if p in planes]
+                nombres = [mapa_n[id] for id in posibles]
+            else:
+                nombres = list(mapa_n.values())
+            with c2: proys = st.multiselect("Proyectos a Analizar:*", sorted(list(set(nombres))))
+            
         if proys:
             sel_ids = [id for id, n in mapa_n.items() if n in proys]
             df_f = df_pnl[df_pnl['id_cuenta_analitica'].isin(sel_ids)] if not df_pnl.empty else pd.DataFrame()
@@ -297,6 +299,12 @@ with tab_renta:
             pct_actual = (margen_actual / total_ing * 100) if total_ing > 0 else 0
             
             color_alerta = "bg-alert-green" if pct_actual > 30 else ("bg-alert-warn" if pct_actual > 10 else "bg-alert-red")
+        else:
+            st.info("💡 Seleccione uno o más proyectos para visualizar la rentabilidad. Las tarjetas reaccionarán dinámicamente.")
+            df_f = df_h = df_s = df_c = df_fe = pd.DataFrame()
+            totales = {k: 0 for k in ['Venta','Instalación','Suministros','WIP','Provisión','Costo Retail','Otros Gastos', 'Ajustes Inv']}
+            total_fact = total_pend = total_ing = costo_horas_mes = costo_vivo = margen_actual = pct_actual = 0
+            color_alerta = "bg-alert-warn"
 
             st.markdown("#### 🚦 Semáforo de Rentabilidad Actual")
             st.caption("Margen calculado en tiempo real: (Total Ingresos - Todos los Costos). Se incluyen costos fijos, transitorios y se restan provisiones.")
@@ -332,6 +340,7 @@ with tab_renta:
             with c11: ui.card_kpi("Horas Depto", costo_horas_mes, "border-blue", "Mes Actual (Trans.)")
             with c12: ui.card_kpi("Provisiones", totales['Provisión'], "border-gray", "Aviso (No suma)") 
             
+        if proys:
             st.divider()
             t1, t2, t3, t4, t5, t6 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend.", "Historial Inv.", "Parte de Horas"])
             with t1: 
