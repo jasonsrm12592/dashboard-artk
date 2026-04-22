@@ -383,7 +383,7 @@ def cargar_historial_inventario_proyecto(ids_an, names_an, project_id=None):
                 if len(n)>4: ids_loc += models.execute_kw(DB, uid, PASSWORD, 'stock.location', 'search', [[['name', 'ilike', n.split(' ')[0]]]])
         
         ids_loc = list(set(ids_loc))
-        if not ids_loc: return pd.DataFrame(), "NO_BODEGA"
+        if not ids_loc: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "NO_BODEGA"
         
         # 4. Obtener pickings desde Órdenes de Venta ligadas a la Cuenta Analítica del Proyecto
         # Esto soluciona el caso donde el material sale de "BP/Stock" hacia el cliente pero pertenece al proyecto.
@@ -412,14 +412,14 @@ def cargar_historial_inventario_proyecto(ids_an, names_an, project_id=None):
             
         ids_moves_all = list(set(ids_moves_loc + ids_moves_so))
         
-        if not ids_moves_all: return pd.DataFrame(), "NO_MOVES"
+        if not ids_moves_all: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "NO_MOVES"
         
         # 6. Leer los campos necesarios
         fields = ['product_id', 'product_uom_qty', 'quantity_done', 'location_id', 'location_dest_id', 'date']
         moves_data = models.execute_kw(DB, uid, PASSWORD, 'stock.move', 'read', [ids_moves_all], {'fields': fields})
         
         df_moves = pd.DataFrame(moves_data)
-        if df_moves.empty: return pd.DataFrame(), "ERROR"
+        if df_moves.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "ERROR"
         
         # Marcar cuáles movimientos entraron por ser de SO vs de Ubicación para el cálculo de Entregas
         # Si un movimiento NO toca child_locs (ej: sale directo de BP/Stock al Customer) lo aceptamos para Entregas
