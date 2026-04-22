@@ -248,7 +248,7 @@ with tab_kpis:
             
             def txt(row):
                 d = ((row['Venta_Neta'] - row['Venta_Ant'])/row['Venta_Ant']*100) if row['Venta_Ant']>0 else 100
-                i = ":material/arrow_upward:" if d>=0 else ":material/arrow_downward:"
+                i = ":material/trending_up:" if d>=0 else ":material/trending_down:"
                 return f"₡{row['Venta_Neta']/1e6:.1f}M {i} {d:.0f}%"
             
             r_fin['T'] = r_fin.apply(txt, axis=1)
