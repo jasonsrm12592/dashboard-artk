@@ -277,6 +277,11 @@ with tab_renta:
             total_pend = df_fe['Monto_CRC'].sum() if not df_fe.empty else 0
             total_ing = total_fact + total_pend
             
+            # Filtrar df_h para solo sumar el costo del mes en curso (costo transitorio no reclasificado)
+            hoy = datetime.now()
+            df_h_mes = df_h[(pd.to_datetime(df_h['Fecha']).dt.year == hoy.year) & (pd.to_datetime(df_h['Fecha']).dt.month == hoy.month)] if not df_h.empty and 'Fecha' in df_h.columns else pd.DataFrame()
+            costo_horas_mes = df_h_mes['Costo'].sum() if not df_h_mes.empty else 0
+            
             # 2. Costo Vivo (TRANSITORIO + CONTABLE - PROVISIONES)
             # El usuario solicita incluir todos los costos y restar provisiones
             costo_vivo = (
@@ -284,7 +289,7 @@ with tab_renta:
                 totales['Ajustes Inv'] + totales['Otros Gastos'] + totales['WIP'] +
                 (df_s['Valor_Total'].sum() if not df_s.empty else 0) + 
                 (df_c['Monto_Pendiente'].sum() if not df_c.empty else 0) + 
-                (df_h['Costo'].sum() if not df_h.empty else 0)
+                costo_horas_mes
             ) - totales['Provisión']
             
             # 3. Margen Actual (Ingreso Total - Costo Vivo Completo)
@@ -329,7 +334,7 @@ with tab_renta:
                 ui.card_kpi("Inventario en Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-purple")
                 ui.card_kpi("WIP (En Proceso)", totales['WIP'], "border-yellow")
                 ui.card_kpi("Compras Pendientes", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-teal")
-                ui.card_kpi("Mano de Obra (Horas)", df_h['Costo'].sum() if not df_h.empty else 0, "border-blue")
+                ui.card_kpi("Mano de Obra (Horas)", costo_horas_mes, "border-blue", "Mes Actual")
                 st.markdown("---")
                 ui.card_kpi("Provisiones (Informativo)", totales['Provisión'], "border-purple", "Reserva contable (No suma)") 
             
