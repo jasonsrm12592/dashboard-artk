@@ -17,6 +17,11 @@ def load_styles():
         /* Controles Minimalistas */
         div[data-testid="stMultiSelect"] label p { font-size: 0.85rem !important; color: #7f8c8d !important; font-weight: 500;}
         div[data-testid="stMultiSelect"] div[data-baseweb="select"] { font-size: 0.85rem !important; }
+
+        /* Animaciones para Gráficos */
+        [data-testid="stPlotlyChart"] {
+            animation: fadeUpIn 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        }
         
         @keyframes fadeUpIn {
             from { opacity: 0; transform: translateY(10px); }
@@ -169,10 +174,30 @@ def card_kpi(titulo, valor, color_class, nota="", formato="moneda", icono=None):
 def config_plotly(fig):
     fig.update_layout(
         template="plotly_white",
-        margin=dict(l=10, r=10, t=30, b=10),
-        font=dict(family="Arial, sans-serif", size=11, color="#333"),
+        margin=dict(l=10, r=10, t=40, b=20),
+        font=dict(family="'Inter', 'Roboto', 'Helvetica Neue', sans-serif", size=12, color="#2c3e50"),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        legend=dict(orientation="h", y=1.1)
+        legend=dict(orientation="h", y=1.1, x=0, xanchor="left", font=dict(size=11, color="#7f8c8d")),
+        hoverlabel=dict(bgcolor="white", font_size=13, font_family="'Inter', sans-serif", bordercolor="#ecf0f1", font_color="#2c3e50"),
+        colorway=['#3498db', '#2ecc71', '#e74c3c', '#f1c40f', '#9b59b6', '#34495e']
+    )
+    fig.update_xaxes(
+        showgrid=False,
+        zeroline=False,
+        showline=True,
+        linecolor="#ecf0f1",
+        tickfont=dict(color="#95a5a6")
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor="#f7f9f9",
+        zeroline=False,
+        showline=False,
+        tickfont=dict(color="#95a5a6")
+    )
+    fig.update_traces(
+        marker=dict(line=dict(width=0)), 
+        selector=dict(type='bar')
     )
     return fig
