@@ -16,11 +16,11 @@ def load_styles():
         
         .kpi-card {
             background-color: white;
-            border-radius: 8px;
-            padding: 12px 15px;
-            margin-bottom: 10px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
-            border: 1px solid #eaeaef;
+            border-radius: 40px;
+            padding: 10px 20px 10px 12px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.04);
+            border: 2px solid #eaeaef;
             display: flex;
             flex-direction: row;
             align-items: center;
@@ -65,15 +65,15 @@ def load_styles():
         }
         
         /* Colores Semánticos */
-        .border-green { border-left: 4px solid #27ae60; }
-        .border-orange { border-left: 4px solid #d35400; }
-        .border-yellow { border-left: 4px solid #f1c40f; }
-        .border-blue { border-left: 4px solid #2980b9; }
-        .border-purple { border-left: 4px solid #8e44ad; }
-        .border-red { border-left: 4px solid #c0392b; }
-        .border-teal { border-left: 4px solid #16a085; }
-        .border-cyan { border-left: 4px solid #1abc9c; }
-        .border-gray { border-left: 4px solid #7f8c8d; }
+        .border-green { border-color: #27ae60 !important; }
+        .border-orange { border-color: #d35400 !important; }
+        .border-yellow { border-color: #f1c40f !important; }
+        .border-blue { border-color: #2980b9 !important; }
+        .border-purple { border-color: #8e44ad !important; }
+        .border-red { border-color: #c0392b !important; }
+        .border-teal { border-color: #16a085 !important; }
+        .border-cyan { border-color: #1abc9c !important; }
+        .border-gray { border-color: #7f8c8d !important; }
         
         /* Fondos de Alerta */
         .bg-dark-blue { background-color: #f0f8ff; border-left: 5px solid #000080; }

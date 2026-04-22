@@ -309,34 +309,28 @@ with tab_renta:
             
             st.divider()
             
-            st.markdown("#### 📥 Flujo de Ingresos")
-            i1, i2 = st.columns(2)
-            with i1: ui.card_kpi("Facturado (Real)", total_fact, "border-green")
-            with i2: ui.card_kpi("Por Facturar (Pendiente)", total_pend, "border-gray")
+            st.markdown("#### 📊 Desglose de Componentes del Proyecto")
             
-            st.divider()
-
-            # LADO A LADO (IZQ: FIRMES / DER: TRANSITORIOS)
-            c_izq, c_der = st.columns(2)
+            # Fila 1
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: ui.card_kpi("Facturado (Real)", total_fact, "border-green", "Ingreso")
+            with c2: ui.card_kpi("Por Facturar", total_pend, "border-green", "Ingreso")
+            with c3: ui.card_kpi("Instalación", totales['Instalación'], "border-red", "Firme")
+            with c4: ui.card_kpi("Suministros", totales['Suministros'], "border-red", "Firme")
             
-            with c_izq:
-                st.markdown("#### 📚 Costos Firmes (Contables - YA CERRADOS)")
-                st.caption("Estos costos NO restan en el semáforo de alerta.")
-                ui.card_kpi("Instalación", totales['Instalación'], "border-orange")
-                ui.card_kpi("Suministros", totales['Suministros'], "border-orange")
-                ui.card_kpi("Costo Venta (Retail)", totales['Costo Retail'], "border-orange")
-                ui.card_kpi("Ajustes Inv.", totales['Ajustes Inv'], "border-gray")
-                ui.card_kpi("Otros Gastos", totales['Otros Gastos'], "border-gray")
-
-            with c_der:
-                st.markdown("#### ⚙️ Costos Transitorios (Vivos)")
-                st.caption("Estos costos SÍ restan en el semáforo.")
-                ui.card_kpi("Inventario en Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-purple")
-                ui.card_kpi("WIP (En Proceso)", totales['WIP'], "border-yellow")
-                ui.card_kpi("Compras Pendientes", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-teal")
-                ui.card_kpi("Mano de Obra (Horas)", costo_horas_mes, "border-blue", "Mes Actual")
-                st.markdown("---")
-                ui.card_kpi("Provisiones (Informativo)", totales['Provisión'], "border-purple", "Reserva contable (No suma)") 
+            # Fila 2
+            c5, c6, c7, c8 = st.columns(4)
+            with c5: ui.card_kpi("Costo Venta", totales['Costo Retail'], "border-red", "Firme")
+            with c6: ui.card_kpi("Ajustes Inv.", totales['Ajustes Inv'], "border-red", "Firme")
+            with c7: ui.card_kpi("Otros Gastos", totales['Otros Gastos'], "border-red", "Firme")
+            with c8: ui.card_kpi("Inventario Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-blue", "Transitorio")
+            
+            # Fila 3
+            c9, c10, c11, c12 = st.columns(4)
+            with c9: ui.card_kpi("WIP (En Proceso)", totales['WIP'], "border-blue", "Transitorio")
+            with c10: ui.card_kpi("Compras Pend.", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-blue", "Transitorio")
+            with c11: ui.card_kpi("Horas Depto", costo_horas_mes, "border-blue", "Mes Actual (Trans.)")
+            with c12: ui.card_kpi("Provisiones", totales['Provisión'], "border-gray", "Aviso (No suma)") 
             
             st.divider()
             t1, t2, t3, t4, t5, t6 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend.", "Historial Inv.", "Parte de Horas"])
