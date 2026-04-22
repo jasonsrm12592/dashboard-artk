@@ -252,6 +252,8 @@ with tab_renta:
         with st.container(border=True):
             st.markdown("##### 🔍 Búsqueda de Proyecto")
             c1, c2 = st.columns(2)
+            mapa_c = dict(zip(df_an['id_cuenta_analitica'].astype(float), df_an['Plan_Nombre']))
+            mapa_n = dict(zip(df_an['id_cuenta_analitica'].astype(float), df_an['Cuenta_Nombre']))
             with c1: planes = st.multiselect("Filtrar por Plan (Opcional):", sorted(list(set(mapa_c.values()))))
             if planes:
                 posibles = [id for id, p in mapa_c.items() if p in planes]
