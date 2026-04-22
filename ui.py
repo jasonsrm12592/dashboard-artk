@@ -15,40 +15,52 @@ def load_styles():
         
         .kpi-card {
             background-color: white;
-            border-radius: 10px;
-            padding: 15px;
+            border-radius: 8px;
+            padding: 12px 15px;
             margin-bottom: 10px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-            border: 1px solid #e0e0e0;
-            text-align: center;
-            color: #444;
-            min-height: 110px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            border: 1px solid #eaeaef;
             display: flex;
-            flex-direction: column;
-            justify-content: center;
+            flex-direction: row;
+            align-items: center;
+            min-height: 80px;
         }
-        .kpi-title {
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #7f8c8d;
-            margin-bottom: 8px;
-            font-weight: 600;
-            min-height: 30px;
+        .kpi-icon-box {
+            font-size: 1.8rem;
+            margin-right: 15px;
+            width: 45px;
+            height: 45px;
             display: flex;
             align-items: center;
             justify-content: center;
+            border-radius: 50%;
+            background-color: #f8f9fa;
+        }
+        .kpi-info {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            flex: 1;
+        }
+        .kpi-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #7f8c8d;
+            margin-bottom: 2px;
+            font-weight: 600;
         }
         .kpi-value {
-            font-size: 1.4rem;
-            font-weight: 700;
+            font-size: 1.25rem;
             color: #2c3e50;
-            margin-bottom: 4px;
+            margin-bottom: 1px;
             font-weight: 700;
+            line-height: 1.1;
         }
         .kpi-note {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: #95a5a6;
+            line-height: 1.1;
         }
         
         /* Colores Semánticos */
@@ -87,7 +99,24 @@ def download_button(df, filename, label="📥 Descargar Excel"):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-def card_kpi(titulo, valor, color_class, nota="", formato="moneda"):
+def get_icon_for_title(title):
+    t = title.lower()
+    if 'ingreso' in t or 'venta' in t or 'facturado' in t or 'cobrar' in t: return "💰"
+    if 'costo' in t or 'gasto' in t or 'compras' in t or 'pendientes' in t: return "📉"
+    if 'margen' in t or 'utilidad' in t or 'salud' in t: return "📈"
+    if 'inventario' in t or 'stock' in t or 'suministros' in t: return "📦"
+    if 'horas' in t or 'tiempo' in t or 'instalación' in t: return "⏱️"
+    if 'wip' in t or 'proceso' in t or 'ajustes' in t: return "⚙️"
+    if 'cliente' in t or 'vendedor' in t or 'retención' in t: return "👥"
+    if 'meta' in t or 'cumplimiento' in t: return "🎯"
+    if 'ticket' in t or 'provisión' in t: return "🧾"
+    if 'alerta' in t or 'riesgo' in t or 'vencido' in t or 'churn' in t or 'capital' in t: return "🚨"
+    return "📊"
+
+def card_kpi(titulo, valor, color_class, nota="", formato="moneda", icono=None):
+    if not icono:
+        icono = get_icon_for_title(titulo)
+        
     try:
         val_float = float(valor)
         es_numero = True
@@ -106,9 +135,14 @@ def card_kpi(titulo, valor, color_class, nota="", formato="moneda"):
         
     st.markdown(f"""
     <div class="kpi-card {color_class}">
-        <div class="kpi-title">{titulo}</div>
-        <div class="kpi-value">{val_fmt}</div>
-        <div class="kpi-note">{nota}</div>
+        <div class="kpi-icon-box">
+            {icono}
+        </div>
+        <div class="kpi-info">
+            <div class="kpi-title">{titulo}</div>
+            <div class="kpi-value">{val_fmt}</div>
+            <div class="kpi-note">{nota}</div>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
