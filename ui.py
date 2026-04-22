@@ -25,6 +25,11 @@ def load_styles():
             flex-direction: row;
             align-items: center;
             min-height: 80px;
+            transition: transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+        }
+        .kpi-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 24px rgba(0,0,0,0.1);
         }
         .kpi-icon-box {
             font-size: 1.8rem;
@@ -36,6 +41,11 @@ def load_styles():
             justify-content: center;
             border-radius: 50%;
             background-color: #f8f9fa;
+            transition: transform 0.3s ease;
+        }
+        .kpi-card:hover .kpi-icon-box {
+            transform: scale(1.15) rotate(-5deg);
+            background-color: #f0f2f5;
         }
         .kpi-info {
             display: flex;
