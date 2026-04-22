@@ -281,13 +281,15 @@ def cargar_detalle_horas_mes(ids):
         models = xmlrpc.client.ServerProxy(f'{URL}/xmlrpc/2/object')
         hoy = datetime.now()
         ids_l = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'search', [[['account_id', 'in', [int(x) for x in ids if x]], ['date', '>=', hoy.replace(day=1).strftime('%Y-%m-%d')], ['date', '<=', hoy.strftime('%Y-%m-%d')], ['x_studio_tipo_horas_1', '!=', False]]])
-        data = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids_l], {'fields': ['amount', 'unit_amount', 'x_studio_tipo_horas_1']})
+        data = models.execute_kw(DB, uid, PASSWORD, 'account.analytic.line', 'read', [ids_l], {'fields': ['date', 'employee_id', 'amount', 'unit_amount', 'x_studio_tipo_horas_1']})
         df = pd.DataFrame(data)
         if not df.empty:
             df['Multiplicador'] = df['x_studio_tipo_horas_1'].astype(str).apply(lambda x: 3.0 if "doble" in x.lower() else (1.5 if "extra" in x.lower() else 1.0))
             df['Costo'] = df['amount'].abs() * df['Multiplicador']
             df['Horas'] = df['unit_amount']
             df['Tipo_Hora'] = df['x_studio_tipo_horas_1']
+            df['Fecha'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d') if 'date' in df.columns else None
+            df['Técnico'] = df['employee_id'].apply(lambda x: x[1] if isinstance(x, list) and len(x) > 1 else (str(x) if x else 'Desconocido')) if 'employee_id' in df.columns else 'Desconocido'
         return df
     except: return pd.DataFrame()
 

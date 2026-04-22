@@ -334,7 +334,7 @@ with tab_renta:
                 ui.card_kpi("Provisiones (Informativo)", totales['Provisión'], "border-purple", "Reserva contable (No suma)") 
             
             st.divider()
-            t1, t2, t3, t4, t5 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend.", "Historial Inv."])
+            t1, t2, t3, t4, t5, t6 = st.tabs(["Inventario", "Compras", "Contabilidad", "Fact. Pend.", "Historial Inv.", "Parte de Horas"])
             with t1: 
                 st.dataframe(df_s, use_container_width=True)
                 ui.download_button(df_s, "Inventario_en_Sitio", "📥 Descargar Inventario")
@@ -409,6 +409,15 @@ with tab_renta:
                 else:
                     st.info("No hay ajustes posteriores registrables.")
                 
+            with t6:
+                if not df_h.empty:
+                    cols_horas = ['Fecha', 'Técnico', 'Tipo_Hora', 'Horas']
+                    df_h_show = df_h[[c for c in cols_horas if c in df_h.columns]].rename(columns={'Tipo_Hora': 'Tipo de Hora', 'Horas': 'Cantidad (Horas)'})
+                    st.dataframe(df_h_show, use_container_width=True, hide_index=True)
+                    ui.download_button(df_h_show, "Parte_de_Horas", "📥 Descargar Horas")
+                else:
+                    st.info("No hay registro de horas para este proyecto en el período.")
+                    
             st.divider()
 
             # --- ESTADO DE RESULTADOS (V3: CON COMISIÓN VENDEDOR) ---
