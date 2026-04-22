@@ -103,26 +103,36 @@ with st.spinner('Cargando...'):
 # === PESTAÑA 1: VISIÓN GENERAL ===
 with tab_kpis:
     if not df_main.empty:
-        col_f, _ = st.columns([1,3])
+        col_f, col_m, _ = st.columns([1,1,2])
         with col_f: anio_sel = st.selectbox(":material/calendar_today: Año Fiscal", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True))
+        mes_map_gen = {0: "Todos", 1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
+        with col_m: mes_sel = st.selectbox(":material/calendar_month: Mes", list(mes_map_gen.values()), key="gen_mes")
+        
         df_anio = df_main[df_main['invoice_date'].dt.year == anio_sel]
         df_ant = df_main[df_main['invoice_date'].dt.year == (anio_sel - 1)]
+        df_meta_sel = df_metas[df_metas['Anio'] == anio_sel]
+        
+        if mes_sel != "Todos":
+            mes_num = {v:k for k,v in mes_map_gen.items()}[mes_sel]
+            df_anio = df_anio[df_anio['invoice_date'].dt.month == mes_num]
+            df_ant = df_ant[df_ant['invoice_date'].dt.month == mes_num]
+            df_meta_sel = df_meta_sel[df_meta_sel['Mes_Num'] == mes_num]
         
         venta = df_anio['Venta_Neta_USD'].sum()
         delta = ((venta - df_ant['Venta_Neta_USD'].sum()) / df_ant['Venta_Neta_USD'].sum() * 100) if df_ant['Venta_Neta_USD'].sum() > 0 else 0
-        meta = df_metas[df_metas['Anio'] == anio_sel]['Dolares'].sum()
+        meta = df_meta_sel['Dolares'].sum()
         
         c1, c2, c3, c4 = st.columns(4)
         with c1: ui.card_kpi("Venta Total (USD)", venta, "border-green", f"{delta:+.1f}% vs Anterior", formato="usd")
-        with c2: ui.card_kpi("Meta Anual (USD)", meta, "bg-dark-blue", formato="usd")
+        with c2: ui.card_kpi("Meta (USD)", meta, "bg-dark-blue", formato="usd")
         with c3: ui.card_kpi("Cumplimiento", f"{(venta/meta*100) if meta>0 else 0:.1f}%", "border-blue", formato="raw")
         with c4: ui.card_kpi("Ticket Prom. (USD)", (venta/df_anio['name'].nunique()) if df_anio['name'].nunique()>0 else 0, "border-purple", formato="usd")
         
         st.divider()
 
-        st.markdown(f"### 🎯 Cumplimiento de Meta USD ({anio_sel})")
+        st.markdown(f"### :material/sentiment_dissatisfied: Cumplimiento de Meta USD ({anio_sel})")
         v_act = df_anio.groupby('Mes_Num')['Venta_Neta_USD'].sum().reset_index().rename(columns={'Venta_Neta_USD': 'Actual'})
-        v_meta = df_metas[df_metas['Anio'] == anio_sel].groupby('Mes_Num')['Dolares'].sum().reset_index().rename(columns={'Dolares': 'Meta'})
+        v_meta = df_meta_sel.groupby('Mes_Num')['Dolares'].sum().reset_index().rename(columns={'Dolares': 'Meta'})
         df_gm = pd.DataFrame({'Mes_Num': range(1, 13)}).merge(v_act, on='Mes_Num', how='left').merge(v_meta, on='Mes_Num', how='left').fillna(0)
         df_gm['Mes'] = df_gm['Mes_Num'].map({1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'})
         
@@ -527,10 +537,12 @@ with tab_prod:
     df_cat = services.cargar_inventario_general()
     if not df_prod.empty:
         # --- 1. FILTROS GENERALES ---
-        c_f1, c_f2 = st.columns([1, 4])
+        c_f1, c_f2, c_f3 = st.columns([1, 1, 3])
         with c_f1: 
             anio = st.selectbox(":material/calendar_today: Año", sorted(df_prod['date'].dt.year.unique(), reverse=True), key="prod_anio_sel")
-        with c_f2: 
+        with c_f2:
+            mes_prod = st.selectbox(":material/calendar_month: Mes", list(mes_map_gen.values()), key="prod_mes_sel")
+        with c_f3: 
             # Selector de métrica (Afecta a TODOS los gráficos)
             tipo_ver = st.radio(":material/bar_chart: Ver Gráficos por:", 
                                 ["Monto (₡)", "Cantidad (Und)", "Freq. Facturas (# Docs)"], 
@@ -550,8 +562,11 @@ with tab_prod:
             agg_func = 'nunique' # Conteo único de facturas
             fmt_text = ''
         
-        # Filtrar datos base por año
+        # Filtrar datos base por año (y mes)
         df_p = df_prod[df_prod['date'].dt.year == anio].merge(df_cat[['ID_Producto','Tipo']], on='ID_Producto', how='left').fillna({'Tipo':'Otro'})
+        if mes_prod != "Todos":
+            mes_num = {v:k for k,v in mes_map_gen.items()}[mes_prod]
+            df_p = df_p[df_p['date'].dt.month == mes_num]
         
         # --- 2. GRÁFICOS GLOBALES ---
         c_m1, c_m2 = st.columns([1, 2])
@@ -686,8 +701,17 @@ with tab_cx:
 # === PESTAÑA 6: SEGMENTACIÓN ===
 with tab_cli:
     if not df_main.empty:
-        anio_c = st.selectbox("Año", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True), key="sc")
+        col_c_1, col_c_2 = st.columns([1, 1])
+        with col_c_1: anio_c = st.selectbox("Año", sorted(df_main['invoice_date'].dt.year.unique(), reverse=True), key="sc")
+        with col_c_2: mes_cli = st.selectbox("Mes", list(mes_map_gen.values()), key="sc_mes")
+        
         df_c = df_main[df_main['invoice_date'].dt.year == anio_c]
+        df_old = df_main[df_main['invoice_date'].dt.year == (anio_c - 1)]
+        
+        if mes_cli != "Todos":
+            mes_num = {v:k for k,v in mes_map_gen.items()}[mes_cli]
+            df_c = df_c[df_c['invoice_date'].dt.month == mes_num]
+            df_old = df_old[df_old['invoice_date'].dt.month == mes_num]
         c1, c2, c3 = st.columns(3)
         with c1: 
             st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Provincia', 'Ventas por Provincia', prefix="₡")), use_container_width=True)
@@ -699,7 +723,6 @@ with tab_cli:
             st.plotly_chart(ui.config_plotly(create_improved_pie(df_c, 'Venta_Neta', 'Categoria_Cliente', 'Ventas por Categoría', prefix="₡")), use_container_width=True)
             ui.download_button(df_c.groupby('Categoria_Cliente')['Venta_Neta'].sum().reset_index(), f"Ventas_Categoria_{anio_c}")
         st.divider()
-        df_old = df_main[df_main['invoice_date'].dt.year == (anio_c - 1)]
         cli_now = set(df_c['Cliente'])
         cli_old = set(df_old['Cliente'])
         nuevos = list(cli_now - cli_old)
@@ -925,7 +948,7 @@ with tab_vend:
 # === PESTAÑA 8: RADIOGRAFÍA ===
 with tab_det:
     if not df_main.empty:
-        c_search, c_year = st.columns([3, 1])
+        c_search, c_year, c_month = st.columns([2, 1, 1])
         with c_search:
             cli = st.selectbox("Buscar Cliente:", sorted(df_main['Cliente'].unique()), index=None, placeholder="Escriba para buscar...")
         
@@ -937,13 +960,20 @@ with tab_det:
             with c_year:
                 # Selector de Año (con opción 'Todos')
                 rad_year = st.selectbox("Año:", ["Todos"] + available_years, key=f"rad_year_{cli}")
+            with c_month:
+                rad_month = st.selectbox("Mes:", list(mes_map_gen.values()), key=f"rad_month_{cli}")
             
             # Filtrar datos según selección
-            if rad_year == "Todos":
-                df_cl = df_full_history
-                is_filtered = False
-            else:
-                df_cl = df_full_history[df_full_history['invoice_date'].dt.year == rad_year]
+            df_cl = df_full_history.copy()
+            is_filtered = False
+            
+            if rad_year != "Todos":
+                df_cl = df_cl[df_cl['invoice_date'].dt.year == rad_year]
+                is_filtered = True
+                
+            if rad_month != "Todos":
+                mes_num = {v:k for k,v in mes_map_gen.items()}[rad_month]
+                df_cl = df_cl[df_cl['invoice_date'].dt.month == mes_num]
                 is_filtered = True
 
             # Cálculos KPI (Sobre la data filtrada)
