@@ -14,6 +14,10 @@ def load_styles():
         header {visibility: hidden;}
         .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
         
+        /* Controles Minimalistas */
+        div[data-testid="stMultiSelect"] label p { font-size: 0.85rem !important; color: #7f8c8d !important; font-weight: 500;}
+        div[data-testid="stMultiSelect"] div[data-baseweb="select"] { font-size: 0.85rem !important; }
+        
         @keyframes fadeUpIn {
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }

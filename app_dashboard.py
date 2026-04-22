@@ -250,17 +250,17 @@ with tab_renta:
     df_pnl = services.cargar_pnl_historico()
     if not df_an.empty:
         with st.container(border=True):
-            st.markdown("##### 🔍 Búsqueda de Proyecto")
+            st.markdown("<h5 style='display:flex; align-items:center; gap:8px; margin-bottom: 0px;'><span class='material-symbols-outlined' style='color:#7f8c8d;'>search</span> Búsqueda de Proyecto</h5>", unsafe_allow_html=True)
             c1, c2 = st.columns(2)
             mapa_c = dict(zip(df_an['id_cuenta_analitica'].astype(float), df_an['Plan_Nombre']))
             mapa_n = dict(zip(df_an['id_cuenta_analitica'].astype(float), df_an['Cuenta_Nombre']))
-            with c1: planes = st.multiselect("Filtrar por Plan (Opcional):", sorted(list(set(mapa_c.values()))))
+            with c2: planes = st.multiselect("Filtrar por Plan (Opcional):", sorted(list(set(mapa_c.values()))))
             if planes:
                 posibles = [id for id, p in mapa_c.items() if p in planes]
                 nombres = [mapa_n[id] for id in posibles]
             else:
                 nombres = list(mapa_n.values())
-            with c2: proys = st.multiselect("Proyectos a Analizar:*", sorted(list(set(nombres))))
+            with c1: proys = st.multiselect("Proyectos a Analizar:*", sorted(list(set(nombres))))
             
         if proys:
             sel_ids = [id for id, n in mapa_n.items() if n in proys]
@@ -308,7 +308,7 @@ with tab_renta:
             total_fact = total_pend = total_ing = costo_horas_mes = costo_vivo = margen_actual = pct_actual = 0
             color_alerta = "bg-alert-warn"
 
-        st.markdown("#### 🚦 Semáforo de Rentabilidad Actual")
+        st.markdown("<h4 style='display:flex; align-items:center; gap:8px; margin-bottom: 0;'><span class='material-symbols-outlined' style='color:#7f8c8d;'>insights</span> Semáforo de Rentabilidad Actual</h4>", unsafe_allow_html=True)
         st.caption("Margen calculado en tiempo real: (Total Ingresos - Todos los Costos). Se incluyen costos fijos, transitorios y se restan provisiones.")
         
         k1, k2, k3, k4 = st.columns(4)
@@ -319,7 +319,7 @@ with tab_renta:
         
         st.divider()
         
-        st.markdown("#### 📊 Desglose de Componentes del Proyecto")
+        st.markdown("<h4 style='display:flex; align-items:center; gap:8px; margin-bottom: 0;'><span class='material-symbols-outlined' style='color:#7f8c8d;'>view_list</span> Desglose de Componentes del Proyecto</h4>", unsafe_allow_html=True)
         
         # Fila 1
         c1, c2, c3, c4 = st.columns(4)
@@ -368,7 +368,7 @@ with tab_renta:
                 if df_ensambles.empty and df_cust.empty and df_post.empty:
                     st.info(f"No hay historial registrable o status: {hist_status}")
                 
-                st.subheader("🛠️ Ensambles (Producción)")
+                st.markdown("<h4 style='display:flex; align-items:center; gap:8px;'><span class='material-symbols-outlined' style='color:#7f8c8d;'>build</span> Ensambles (Producción)</h4>", unsafe_allow_html=True)
                 if not df_ensambles.empty:
                     df_to_show_p = df_ensambles[['Producto', 'Ensamblado_OUT', 'Desensamblado_IN', 'Neto_Ensamblado']].rename(columns={
                         'Ensamblado_OUT': 'Ensamblado',
@@ -391,7 +391,7 @@ with tab_renta:
                 
                 st.divider()
                 
-                st.subheader("🚚 Entregas (Cliente)")
+                st.markdown("<h4 style='display:flex; align-items:center; gap:8px;'><span class='material-symbols-outlined' style='color:#7f8c8d;'>local_shipping</span> Entregas (Cliente)</h4>", unsafe_allow_html=True)
                 if not df_cust.empty:
                     df_to_show_c = df_cust[['Producto', 'Entregado_OUT', 'Devuelto_IN', 'Neto_Entregado']].rename(columns={
                         'Entregado_OUT': 'Entregado a Cliente',
@@ -406,7 +406,7 @@ with tab_renta:
                     
                 st.divider()
                 
-                st.subheader("🔧 Ajustes Posteriores")
+                st.markdown("<h4 style='display:flex; align-items:center; gap:8px;'><span class='material-symbols-outlined' style='color:#7f8c8d;'>handyman</span> Ajustes Posteriores</h4>", unsafe_allow_html=True)
                 if not df_post.empty:
                     df_to_show_post = df_post[['Producto', 'Ajuste_IN', 'Ajuste_OUT', 'Neto_Ajuste']].rename(columns={
                         'Ajuste_IN': 'Ingreso p/Ajuste',
