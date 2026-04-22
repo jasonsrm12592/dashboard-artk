@@ -308,39 +308,39 @@ with tab_renta:
             total_fact = total_pend = total_ing = costo_horas_mes = costo_vivo = margen_actual = pct_actual = 0
             color_alerta = "bg-alert-warn"
 
-            st.markdown("#### 🚦 Semáforo de Rentabilidad Actual")
-            st.caption("Margen calculado en tiempo real: (Total Ingresos - Todos los Costos). Se incluyen costos fijos, transitorios y se restan provisiones.")
-            
-            k1, k2, k3, k4 = st.columns(4)
-            with k1: ui.card_kpi("Ingreso Total Proy.", total_ing, "border-green")
-            with k2: ui.card_kpi("Costo Vivo Total", costo_vivo, "border-red")
-            with k3: ui.card_kpi("MARGEN ACTUAL", margen_actual, color_alerta)
-            with k4: ui.card_kpi("% Actual", pct_actual, "border-blue", formato="percent")
-            
-            st.divider()
-            
-            st.markdown("#### 📊 Desglose de Componentes del Proyecto")
-            
-            # Fila 1
-            c1, c2, c3, c4 = st.columns(4)
-            with c1: ui.card_kpi("Facturado (Real)", total_fact, "border-green", "Ingreso")
-            with c2: ui.card_kpi("Por Facturar", total_pend, "border-green", "Ingreso")
-            with c3: ui.card_kpi("Instalación", totales['Instalación'], "border-red", "Firme")
-            with c4: ui.card_kpi("Suministros", totales['Suministros'], "border-red", "Firme")
-            
-            # Fila 2
-            c5, c6, c7, c8 = st.columns(4)
-            with c5: ui.card_kpi("Costo Venta", totales['Costo Retail'], "border-red", "Firme")
-            with c6: ui.card_kpi("Ajustes Inv.", totales['Ajustes Inv'], "border-red", "Firme")
-            with c7: ui.card_kpi("Otros Gastos", totales['Otros Gastos'], "border-red", "Firme")
-            with c8: ui.card_kpi("Inventario Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-blue", "Transitorio")
-            
-            # Fila 3
-            c9, c10, c11, c12 = st.columns(4)
-            with c9: ui.card_kpi("WIP (En Proceso)", totales['WIP'], "border-blue", "Transitorio")
-            with c10: ui.card_kpi("Compras Pend.", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-blue", "Transitorio")
-            with c11: ui.card_kpi("Horas Depto", costo_horas_mes, "border-blue", "Mes Actual (Trans.)")
-            with c12: ui.card_kpi("Provisiones", totales['Provisión'], "border-gray", "Aviso (No suma)") 
+        st.markdown("#### 🚦 Semáforo de Rentabilidad Actual")
+        st.caption("Margen calculado en tiempo real: (Total Ingresos - Todos los Costos). Se incluyen costos fijos, transitorios y se restan provisiones.")
+        
+        k1, k2, k3, k4 = st.columns(4)
+        with k1: ui.card_kpi("Ingreso Total Proy.", total_ing, "border-green")
+        with k2: ui.card_kpi("Costo Vivo Total", costo_vivo, "border-red")
+        with k3: ui.card_kpi("MARGEN ACTUAL", margen_actual, color_alerta)
+        with k4: ui.card_kpi("% Actual", pct_actual, "border-blue", formato="percent")
+        
+        st.divider()
+        
+        st.markdown("#### 📊 Desglose de Componentes del Proyecto")
+        
+        # Fila 1
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: ui.card_kpi("Facturado (Real)", total_fact, "border-green", "Ingreso")
+        with c2: ui.card_kpi("Por Facturar", total_pend, "border-green", "Ingreso")
+        with c3: ui.card_kpi("Instalación", totales['Instalación'], "border-red", "Firme")
+        with c4: ui.card_kpi("Suministros", totales['Suministros'], "border-red", "Firme")
+        
+        # Fila 2
+        c5, c6, c7, c8 = st.columns(4)
+        with c5: ui.card_kpi("Costo Venta", totales['Costo Retail'], "border-red", "Firme")
+        with c6: ui.card_kpi("Ajustes Inv.", totales['Ajustes Inv'], "border-red", "Firme")
+        with c7: ui.card_kpi("Otros Gastos", totales['Otros Gastos'], "border-red", "Firme")
+        with c8: ui.card_kpi("Inventario Sitio", df_s['Valor_Total'].sum() if not df_s.empty else 0, "border-blue", "Transitorio")
+        
+        # Fila 3
+        c9, c10, c11, c12 = st.columns(4)
+        with c9: ui.card_kpi("WIP (En Proceso)", totales['WIP'], "border-blue", "Transitorio")
+        with c10: ui.card_kpi("Compras Pend.", df_c['Monto_Pendiente'].sum() if not df_c.empty else 0, "border-blue", "Transitorio")
+        with c11: ui.card_kpi("Horas Depto", costo_horas_mes, "border-blue", "Mes Actual (Trans.)")
+        with c12: ui.card_kpi("Provisiones", totales['Provisión'], "border-gray", "Aviso (No suma)") 
             
         if proys:
             st.divider()
