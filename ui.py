@@ -173,31 +173,31 @@ def card_kpi(titulo, valor, color_class, nota="", formato="moneda", icono=None):
 
 def config_plotly(fig):
     fig.update_layout(
-        template="plotly_white",
         margin=dict(l=10, r=10, t=50, b=20),
-        font=dict(family="'Inter', 'Roboto', 'Helvetica Neue', sans-serif", size=11, color="#2c3e50"),
+        font=dict(family="'Inter', 'Roboto', 'Helvetica Neue', sans-serif", size=11),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        legend=dict(orientation="h", y=1.1, font=dict(size=11, color="#7f8c8d")),
-        hoverlabel=dict(bgcolor="white", font_size=13, font_family="'Inter', sans-serif", bordercolor="#ecf0f1", font_color="#2c3e50"),
+        legend=dict(orientation="h", y=1.1, font=dict(size=11)),
+        hoverlabel=dict(font_size=13, font_family="'Inter', sans-serif"),
         colorway=['#3498db', '#2ecc71', '#e74c3c', '#f1c40f', '#9b59b6', '#34495e']
     )
     fig.update_xaxes(
         showgrid=False,
         zeroline=False,
-        showline=True,
-        linecolor="#ecf0f1",
-        tickfont=dict(color="#95a5a6")
+        showline=True
     )
     fig.update_yaxes(
         showgrid=True,
-        gridcolor="#f7f9f9",
         zeroline=False,
-        showline=False,
-        tickfont=dict(color="#95a5a6")
+        showline=False
     )
     fig.update_traces(
         marker=dict(line=dict(width=0)), 
         selector=dict(type='bar')
+    )
+    # Asegurar animación fluida de expansión al pasar el mouse por pasteles
+    fig.update_traces(
+        hoverinfo='label+percent',
+        selector=dict(type='pie')
     )
     return fig
