@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 # Estilos CSS
 def load_styles():
     st.markdown("""
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet" />
     <style>
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
@@ -101,17 +102,17 @@ def download_button(df, filename, label="📥 Descargar Excel"):
 
 def get_icon_for_title(title):
     t = title.lower()
-    if 'ingreso' in t or 'venta' in t or 'facturado' in t or 'cobrar' in t: return "💰"
-    if 'costo' in t or 'gasto' in t or 'compras' in t or 'pendientes' in t: return "📉"
-    if 'margen' in t or 'utilidad' in t or 'salud' in t: return "📈"
-    if 'inventario' in t or 'stock' in t or 'suministros' in t: return "📦"
-    if 'horas' in t or 'tiempo' in t or 'instalación' in t: return "⏱️"
-    if 'wip' in t or 'proceso' in t or 'ajustes' in t: return "⚙️"
-    if 'cliente' in t or 'vendedor' in t or 'retención' in t: return "👥"
-    if 'meta' in t or 'cumplimiento' in t: return "🎯"
-    if 'ticket' in t or 'provisión' in t: return "🧾"
-    if 'alerta' in t or 'riesgo' in t or 'vencido' in t or 'churn' in t or 'capital' in t: return "🚨"
-    return "📊"
+    if 'ingreso' in t or 'venta' in t or 'facturado' in t or 'cobrar' in t: return "payments"
+    if 'costo' in t or 'gasto' in t or 'compras' in t or 'pendientes' in t: return "trending_down"
+    if 'margen' in t or 'utilidad' in t or 'salud' in t: return "trending_up"
+    if 'inventario' in t or 'stock' in t or 'suministros' in t: return "inventory_2"
+    if 'horas' in t or 'tiempo' in t or 'instalación' in t: return "schedule"
+    if 'wip' in t or 'proceso' in t or 'ajustes' in t: return "build"
+    if 'cliente' in t or 'vendedor' in t or 'retención' in t: return "group"
+    if 'meta' in t or 'cumplimiento' in t: return "track_changes"
+    if 'ticket' in t or 'provisión' in t: return "receipt_long"
+    if 'alerta' in t or 'riesgo' in t or 'vencido' in t or 'churn' in t or 'capital' in t: return "warning"
+    return "analytics"
 
 def card_kpi(titulo, valor, color_class, nota="", formato="moneda", icono=None):
     if not icono:
@@ -136,7 +137,7 @@ def card_kpi(titulo, valor, color_class, nota="", formato="moneda", icono=None):
     st.markdown(f"""
     <div class="kpi-card {color_class}">
         <div class="kpi-icon-box">
-            {icono}
+            <span class="material-symbols-outlined" style="font-size: 26px; color: #7f8c8d;">{icono}</span>
         </div>
         <div class="kpi-info">
             <div class="kpi-title">{titulo}</div>
